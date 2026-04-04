@@ -89,12 +89,13 @@ function decodeFrames(buffer) {
 }
 
 export class WebSocketPeer extends EventEmitter {
-  constructor(socket) {
+  constructor(socket, initialBuffer = Buffer.alloc(0)) {
     super();
     this.socket = socket;
-    this.buffer = Buffer.alloc(0);
+    this.buffer = initialBuffer;
+    this.closed = false;
 
-    socket.on("data", (chunk) => {
+    const processBuffer = (chunk) => {
       this.buffer = Buffer.concat([this.buffer, chunk]);
       const { messages, remaining } = decodeFrames(this.buffer);
       this.buffer = remaining;
@@ -107,28 +108,56 @@ export class WebSocketPeer extends EventEmitter {
           this.emit("message", message.payload);
         }
       });
-    });
+    };
 
-    socket.on("close", () => this.emit("close"));
-    socket.on("end", () => this.emit("close"));
+    if (initialBuffer.length) {
+      processBuffer(Buffer.alloc(0));
+    }
+
+    socket.on("data", processBuffer);
+
+    socket.on("close", () => this.handleClose());
+    socket.on("end", () => this.handleClose());
     socket.on("error", (error) => this.emit("error", error));
   }
 
   send(payload) {
+    if (this.closed || this.socket.destroyed) {
+      return;
+    }
     this.socket.write(encodeFrame(payload));
   }
 
   close() {
-    if (!this.socket.destroyed) {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    if (!this.socket.destroyed && this.socket.writable) {
       this.socket.end(Buffer.from([0x88, 0x00]));
     }
     this.emit("close");
   }
+
+  handleClose() {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.emit("close");
+  }
 }
 
-export function upgradeToWebSocket(request, socket) {
+export function upgradeToWebSocket(request, socket, head = Buffer.alloc(0)) {
   const clientKey = request.headers["sec-websocket-key"];
-  if (!clientKey) {
+  const upgradeHeader = String(request.headers.upgrade ?? "").toLowerCase();
+  const connectionHeader = String(request.headers.connection ?? "").toLowerCase();
+
+  if (
+    !clientKey ||
+    upgradeHeader !== "websocket" ||
+    !connectionHeader.includes("upgrade")
+  ) {
     socket.destroy();
     return null;
   }
@@ -142,6 +171,5 @@ export function upgradeToWebSocket(request, socket) {
   ];
 
   socket.write(headers.join("\r\n"));
-  return new WebSocketPeer(socket);
+  return new WebSocketPeer(socket, head);
 }
-

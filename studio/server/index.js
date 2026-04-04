@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   createDefaultProject,
+  createSyncProject,
   mergePresetLibraryCatalog,
   normalizeProject,
 } from "../shared/project.js";
@@ -205,6 +206,13 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
     return mergePresetLibraryCatalog(project, presetCatalog);
   }
 
+  function buildProjectSnapshotPayload(session) {
+    return {
+      sessionId: session.sessionId,
+      project: createSyncProject(session.project),
+    };
+  }
+
   function notifyViewerState(session) {
     if (!session.adminPeer) {
       return;
@@ -331,115 +339,122 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
     let activeRole = null;
 
     peer.on("message", async (rawMessage) => {
-      const message = parseSocketMessage(rawMessage);
+      let message;
+      try {
+        message = parseSocketMessage(rawMessage);
+      } catch (error) {
+        console.warn("ButterVizMap WS received invalid message", {
+          preview: String(rawMessage).slice(0, 120),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
 
-      if (message.type === MESSAGE_TYPES.HELLO) {
-        activeRole = message.payload.role;
-        activeSession = ensureSession(message.payload.sessionId);
+      try {
+        if (message.type === MESSAGE_TYPES.HELLO) {
+          activeRole = message.payload.role;
+          activeSession = ensureSession(message.payload.sessionId);
 
-        if (activeRole === "admin") {
-          activeSession.adminPeer = peer;
-          if (message.payload.project) {
-            activeSession.project = await ensureProjectCatalog(
-              normalizeProject(message.payload.project)
+          if (activeRole === "admin") {
+            activeSession.adminPeer = peer;
+            if (message.payload.project) {
+              activeSession.project = await ensureProjectCatalog(
+                normalizeProject(message.payload.project)
+              );
+            } else {
+              activeSession.project = await ensureProjectCatalog(activeSession.project);
+            }
+            send(peer, {
+              type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
+              payload: buildProjectSnapshotPayload(activeSession),
+            });
+            activeSession.viewerPeers.forEach((viewerPeer) =>
+              send(viewerPeer, {
+                type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
+                payload: buildProjectSnapshotPayload(activeSession),
+              })
             );
           } else {
+            activeSession.viewerPeers.add(peer);
             activeSession.project = await ensureProjectCatalog(activeSession.project);
+            send(peer, {
+              type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
+              payload: buildProjectSnapshotPayload(activeSession),
+            });
+            if (activeSession.latestAudioFrame) {
+              send(peer, {
+                type: MESSAGE_TYPES.AUDIO_FRAME,
+                payload: activeSession.latestAudioFrame,
+              });
+            }
           }
-          send(peer, {
-            type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
-            payload: {
-              sessionId: activeSession.sessionId,
-              project: activeSession.project,
-            },
-          });
+
+          notifyViewerState(activeSession);
+          return;
+        }
+
+        if (!activeSession) {
+          return;
+        }
+
+        if (message.type === MESSAGE_TYPES.PROJECT_SNAPSHOT) {
+          activeSession.project = await ensureProjectCatalog(
+            normalizeProject(message.payload.project)
+          );
           activeSession.viewerPeers.forEach((viewerPeer) =>
             send(viewerPeer, {
               type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
-              payload: {
-                sessionId: activeSession.sessionId,
-                project: activeSession.project,
-              },
+              payload: buildProjectSnapshotPayload(activeSession),
             })
           );
-        } else {
-          activeSession.viewerPeers.add(peer);
-          activeSession.project = await ensureProjectCatalog(activeSession.project);
-          send(peer, {
-            type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
-            payload: {
-              sessionId: activeSession.sessionId,
-              project: activeSession.project,
-            },
-          });
-          if (activeSession.latestAudioFrame) {
-            send(peer, {
-              type: MESSAGE_TYPES.AUDIO_FRAME,
-              payload: activeSession.latestAudioFrame,
-            });
+          return;
+        }
+
+        if (message.type === MESSAGE_TYPES.PROJECT_PATCH) {
+          activeSession.project = await ensureProjectCatalog(
+            normalizeProject(mergeProjectPatch(activeSession.project, message.payload.patch))
+          );
+          activeSession.viewerPeers.forEach((viewerPeer) =>
+            send(viewerPeer, {
+              type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
+              payload: buildProjectSnapshotPayload(activeSession),
+            })
+          );
+          return;
+        }
+
+        if (message.type === MESSAGE_TYPES.SCENE_RECALL) {
+          if (activeSession.adminPeer && activeSession.adminPeer !== peer) {
+            send(activeSession.adminPeer, message);
           }
+          activeSession.viewerPeers.forEach((viewerPeer) => send(viewerPeer, message));
+          return;
         }
 
-        notifyViewerState(activeSession);
-        return;
-      }
-
-      if (!activeSession) {
-        return;
-      }
-
-      if (message.type === MESSAGE_TYPES.PROJECT_SNAPSHOT) {
-        activeSession.project = await ensureProjectCatalog(
-          normalizeProject(message.payload.project)
-        );
-        activeSession.viewerPeers.forEach((viewerPeer) =>
-          send(viewerPeer, {
-            type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
-            payload: {
-              sessionId: activeSession.sessionId,
-              project: activeSession.project,
-            },
-          })
-        );
-        return;
-      }
-
-      if (message.type === MESSAGE_TYPES.PROJECT_PATCH) {
-        activeSession.project = await ensureProjectCatalog(
-          normalizeProject(mergeProjectPatch(activeSession.project, message.payload.patch))
-        );
-        activeSession.viewerPeers.forEach((viewerPeer) =>
-          send(viewerPeer, {
-            type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
-            payload: {
-              sessionId: activeSession.sessionId,
-              project: activeSession.project,
-            },
-          })
-        );
-        return;
-      }
-
-      if (message.type === MESSAGE_TYPES.SCENE_RECALL) {
-        if (activeSession.adminPeer && activeSession.adminPeer !== peer) {
-          send(activeSession.adminPeer, message);
+        if (message.type === MESSAGE_TYPES.AUDIO_FRAME) {
+          activeSession.latestAudioFrame = message.payload;
+          activeSession.viewerPeers.forEach((viewerPeer) => send(viewerPeer, message));
+          return;
         }
-        activeSession.viewerPeers.forEach((viewerPeer) => send(viewerPeer, message));
-        return;
-      }
 
-      if (message.type === MESSAGE_TYPES.AUDIO_FRAME) {
-        activeSession.latestAudioFrame = message.payload;
-        activeSession.viewerPeers.forEach((viewerPeer) => send(viewerPeer, message));
-        return;
-      }
-
-      if (message.type === MESSAGE_TYPES.PING) {
-        send(peer, {
-          type: MESSAGE_TYPES.PONG,
-          payload: { timestamp: Date.now() },
+        if (message.type === MESSAGE_TYPES.PING) {
+          send(peer, {
+            type: MESSAGE_TYPES.PONG,
+            payload: { timestamp: Date.now() },
+          });
+        }
+      } catch (error) {
+        console.error("ButterVizMap WS message handling failed", {
+          type: message?.type,
+          sessionId: activeSession?.sessionId,
+          role: activeRole,
+          error: error instanceof Error ? error.stack ?? error.message : String(error),
         });
       }
+    });
+
+    peer.on("error", (error) => {
+      console.warn("ButterVizMap WS peer error", error);
     });
 
     peer.on("close", () => {

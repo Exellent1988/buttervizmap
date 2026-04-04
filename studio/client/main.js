@@ -1,4 +1,4 @@
-import { applySceneToProject } from "../shared/project.js";
+import { applySceneToProject, createSyncProject } from "../shared/project.js";
 import { StudioStore } from "./state/studioStore.js";
 import { SessionSocket } from "./state/sessionSocket.js";
 import { AdminApp } from "./ui/adminApp.js";
@@ -40,7 +40,7 @@ async function boot() {
     getHelloPayload:
       role === "admin"
         ? () => ({
-            project: store.state.project,
+            project: createSyncProject(store.state.project),
           })
         : undefined,
     onStatusChange: (status) => store.setConnectionStatus(status),
@@ -85,8 +85,17 @@ async function boot() {
     app = new OutputApp({
       root,
       store,
+      sessionSocket,
     });
   }
+
+  globalThis.__buttervizmap = {
+    role,
+    sessionId,
+    store,
+    sessionSocket,
+    app,
+  };
 
   app.mount();
   sessionSocket.connect();

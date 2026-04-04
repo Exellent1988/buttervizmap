@@ -581,6 +581,51 @@ export function mergePresetLibraryCatalog(project, catalogPresets = []) {
   });
 }
 
+function collectReferencedPresetIds(project) {
+  const referencedPresetIds = new Set();
+
+  if (project.globalLayer?.presetId) {
+    referencedPresetIds.add(project.globalLayer.presetId);
+  }
+
+  project.elements?.forEach((element) => {
+    if (element.shaderBinding?.presetId) {
+      referencedPresetIds.add(element.shaderBinding.presetId);
+    }
+  });
+
+  project.scenes?.forEach((scene) => {
+    if (scene.state?.globalLayer?.presetId) {
+      referencedPresetIds.add(scene.state.globalLayer.presetId);
+    }
+
+    scene.state?.elements?.forEach((elementState) => {
+      if (elementState.shaderBinding?.presetId) {
+        referencedPresetIds.add(elementState.shaderBinding.presetId);
+      }
+    });
+  });
+
+  return referencedPresetIds;
+}
+
+export function createSyncProject(project) {
+  const normalizedProject = normalizeProject(project);
+  const referencedPresetIds = collectReferencedPresetIds(normalizedProject);
+
+  return normalizeProject({
+    ...normalizedProject,
+    presetLibrary: {
+      presets: normalizedProject.presetLibrary.presets.filter(
+        (preset) =>
+          preset.sourceType !== "file" ||
+          referencedPresetIds.has(preset.id) ||
+          referencedPresetIds.has(preset.sourcePresetId)
+      ),
+    },
+  });
+}
+
 export function duplicatePresetEntry(project, presetId) {
   const preset = project.presetLibrary.presets.find((entry) => entry.id === presetId);
   if (!preset) {

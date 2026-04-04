@@ -1,9 +1,10 @@
 import { StudioCompositor } from "../rendering/compositor.js";
 
 export class OutputApp {
-  constructor({ root, store }) {
+  constructor({ root, store, sessionSocket }) {
     this.root = root;
     this.store = store;
+    this.sessionSocket = sessionSocket;
     this.compositor = null;
     this.nextRenderAt = 0;
   }

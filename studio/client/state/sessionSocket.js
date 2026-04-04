@@ -5,6 +5,7 @@ import {
   parseSocketMessage,
   serializeSocketMessage,
 } from "../../shared/protocol.js";
+import { createSyncProject } from "../../shared/project.js";
 
 export class SessionSocket {
   constructor({ role, sessionId, onMessage, onStatusChange, getHelloPayload }) {
@@ -14,6 +15,9 @@ export class SessionSocket {
     this.onStatusChange = onStatusChange;
     this.getHelloPayload = getHelloPayload;
     this.socket = null;
+    this.reconnectHandle = null;
+    this.manualClose = false;
+    this.reconnectAttempts = 0;
     this.debugState = {
       lastStatus: "offline",
       sentMessages: 0,
@@ -25,6 +29,9 @@ export class SessionSocket {
   }
 
   connect() {
+    clearTimeout(this.reconnectHandle);
+    this.reconnectHandle = null;
+    this.manualClose = false;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${protocol}//${location.host}/ws`;
     this.socket = new WebSocket(url);
@@ -35,6 +42,7 @@ export class SessionSocket {
     this.socket.addEventListener("open", () => {
       this.onStatusChange?.("connected");
       this.debugState.lastStatus = "connected";
+      this.reconnectAttempts = 0;
       const extraPayload = this.getHelloPayload?.() ?? {};
       this.send({
         type: MESSAGE_TYPES.HELLO,
@@ -57,8 +65,13 @@ export class SessionSocket {
     });
 
     this.socket.addEventListener("close", () => {
-      this.onStatusChange?.("offline");
-      this.debugState.lastStatus = "offline";
+      const nextStatus = this.manualClose ? "offline" : "reconnecting";
+      this.onStatusChange?.(nextStatus);
+      this.debugState.lastStatus = nextStatus;
+      this.socket = null;
+      if (!this.manualClose) {
+        this.scheduleReconnect();
+      }
     });
 
     this.socket.addEventListener("error", () => {
@@ -66,6 +79,20 @@ export class SessionSocket {
       this.debugState.lastStatus = "error";
       this.debugState.lastErrorAt = new Date().toISOString();
     });
+  }
+
+  scheduleReconnect() {
+    if (this.reconnectHandle) {
+      return;
+    }
+
+    const delay = Math.min(5000, 500 * 2 ** this.reconnectAttempts);
+    this.reconnectAttempts += 1;
+    this.debugState.nextReconnectDelayMs = delay;
+    this.reconnectHandle = setTimeout(() => {
+      this.reconnectHandle = null;
+      this.connect();
+    }, delay);
   }
 
   send(message) {
@@ -80,7 +107,7 @@ export class SessionSocket {
   sendProject(project) {
     this.send({
       type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
-      payload: { project },
+      payload: { project: createSyncProject(project) },
     });
   }
 
@@ -101,7 +128,17 @@ export class SessionSocket {
   getDebugState() {
     return {
       ...this.debugState,
+      reconnectAttempts: this.reconnectAttempts,
       readyState: this.socket?.readyState ?? WebSocket.CLOSED,
     };
+  }
+
+  disconnect() {
+    this.manualClose = true;
+    clearTimeout(this.reconnectHandle);
+    this.reconnectHandle = null;
+    if (this.socket && this.socket.readyState <= WebSocket.OPEN) {
+      this.socket.close();
+    }
   }
 }
