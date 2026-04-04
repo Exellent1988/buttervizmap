@@ -222,11 +222,9 @@ function renderInteractionBoundaryEcho({
     return;
   }
 
-  const edgeCanvas = createCanvas(width, height);
-  const edgeContext = edgeCanvas.getContext("2d");
-
-  edgeContext.clearRect(0, 0, width, height);
   interactionSummary.forEach((field) => {
+    const edgeCanvas = createCanvas(width, height);
+    const edgeContext = edgeCanvas.getContext("2d");
     const outerWidth =
       Math.max(4, Math.min(width, height) * 0.008) *
       (1 + field.distance + field.feather + field.pulse);
@@ -247,25 +245,41 @@ function renderInteractionBoundaryEcho({
     drawGeometryPath(edgeContext, field.geometry, width, height);
     edgeContext.stroke();
     edgeContext.restore();
+
+    edgeContext.globalCompositeOperation = "source-in";
+    edgeContext.drawImage(sourceCanvas, 0, 0, width, height);
+
+    const centroidBiasX = (field.centroid.x - 0.5) * 2;
+    const centroidBiasY = (field.centroid.y - 0.5) * 2;
+    const edgeStrength =
+      intensity *
+      Math.max(
+        0.15,
+        field.influence * (field.sourceRole === "clip" ? 1.15 : 0.85) + field.distance * 0.35
+      );
+    const normalX = centroidBiasX * width * 0.12 * edgeStrength;
+    const normalY = centroidBiasY * height * 0.12 * edgeStrength;
+    const tangentX = -centroidBiasY * width * 0.08 * edgeStrength * (0.6 + field.swirl);
+    const tangentY = centroidBiasX * height * 0.08 * edgeStrength * (0.6 + field.swirl);
+
+    context.save();
+    context.globalCompositeOperation = "screen";
+    context.globalAlpha = 0.16 + edgeStrength * 0.24;
+    context.drawImage(edgeCanvas, 0, 0, width, height);
+
+    context.globalCompositeOperation = "lighter";
+    context.globalAlpha = 0.08 + edgeStrength * 0.16;
+    context.drawImage(edgeCanvas, normalX, normalY, width, height);
+    context.globalAlpha = 0.06 + edgeStrength * 0.14;
+    context.drawImage(edgeCanvas, -normalX, -normalY, width, height);
+
+    context.globalCompositeOperation = "overlay";
+    context.globalAlpha = 0.05 + edgeStrength * 0.12;
+    context.drawImage(edgeCanvas, tangentX, tangentY, width, height);
+    context.globalAlpha = 0.04 + edgeStrength * 0.1;
+    context.drawImage(edgeCanvas, -tangentX, -tangentY, width, height);
+    context.restore();
   });
-
-  edgeContext.globalCompositeOperation = "source-in";
-  edgeContext.drawImage(sourceCanvas, 0, 0, width, height);
-
-  const interactionState = summarizeInteraction(interactionSummary);
-  const shiftX = interactionState.offsetX * width * 0.08 * intensity;
-  const shiftY = interactionState.offsetY * height * 0.08 * intensity;
-
-  context.save();
-  context.globalCompositeOperation = "screen";
-  context.globalAlpha = 0.22 + intensity * 0.28;
-  context.drawImage(edgeCanvas, 0, 0, width, height);
-  context.globalCompositeOperation = "lighter";
-  context.globalAlpha = 0.08 + intensity * 0.16;
-  context.drawImage(edgeCanvas, shiftX, shiftY, width, height);
-  context.globalAlpha = 0.06 + intensity * 0.12;
-  context.drawImage(edgeCanvas, -shiftX, -shiftY, width, height);
-  context.restore();
 }
 
 function drawTexturedTriangle(
@@ -381,30 +395,44 @@ function drawWarpedQuad(context, sourceCanvas, geometry, outputWidth, outputHeig
 }
 
 function drawWarpedPolygon(context, sourceCanvas, geometry, outputWidth, outputHeight) {
-  const bounds = getPolygonBounds(geometry.points);
-  const localWidth = Math.max(bounds.maxX - bounds.minX, 0.001);
-  const localHeight = Math.max(bounds.maxY - bounds.minY, 0.001);
   const polygonPoints = geometry.points.map((point) => ({
     x: point.x * outputWidth,
     y: point.y * outputHeight,
   }));
-  const sourcePoints = geometry.points.map((point) => ({
-    x: ((point.x - bounds.minX) / localWidth) * sourceCanvas.width,
-    y: ((point.y - bounds.minY) / localHeight) * sourceCanvas.height,
-  }));
+  const centroid = getPolygonCentroid(geometry.points);
+  const maxDistance = Math.max(0.001, getMaxDistanceFromCentroid(geometry.points));
+  const centroidPixel = {
+    x: centroid.x * outputWidth,
+    y: centroid.y * outputHeight,
+  };
+  const sourceCenter = {
+    x: sourceCanvas.width / 2,
+    y: sourceCanvas.height / 2,
+  };
+  const sourceRadiusX = sourceCanvas.width * 0.48;
+  const sourceRadiusY = sourceCanvas.height * 0.48;
+  const sourcePoints = geometry.points.map((point) => {
+    const angle = Math.atan2(point.y - centroid.y, point.x - centroid.x);
+    const radius =
+      Math.hypot(point.x - centroid.x, point.y - centroid.y) / maxDistance;
+    return {
+      x: sourceCenter.x + Math.cos(angle) * sourceRadiusX * radius,
+      y: sourceCenter.y + Math.sin(angle) * sourceRadiusY * radius,
+    };
+  });
 
   for (let index = 1; index < polygonPoints.length - 1; index += 1) {
     drawTexturedTriangle(
       context,
       sourceCanvas,
-      sourcePoints[0].x,
-      sourcePoints[0].y,
+      sourceCenter.x,
+      sourceCenter.y,
       sourcePoints[index].x,
       sourcePoints[index].y,
       sourcePoints[index + 1].x,
       sourcePoints[index + 1].y,
-      polygonPoints[0].x,
-      polygonPoints[0].y,
+      centroidPixel.x,
+      centroidPixel.y,
       polygonPoints[index].x,
       polygonPoints[index].y,
       polygonPoints[index + 1].x,

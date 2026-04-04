@@ -322,14 +322,14 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
     socket.on("close", () => trackedSockets.delete(socket));
   });
 
-  server.on("upgrade", (request, socket) => {
+  server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
     if (url.pathname !== "/ws") {
       socket.destroy();
       return;
     }
 
-    const peer = upgradeToWebSocket(request, socket);
+    const peer = upgradeToWebSocket(request, socket, head);
     if (!peer) {
       return;
     }

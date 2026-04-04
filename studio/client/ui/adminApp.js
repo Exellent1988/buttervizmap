@@ -268,6 +268,14 @@ export class AdminApp {
     );
   }
 
+  mergePresetCatalogIntoProject(project) {
+    if (!this.availablePresetCatalog.length) {
+      return project;
+    }
+
+    return mergePresetLibraryCatalog(project, this.availablePresetCatalog);
+  }
+
   scheduleProjectSync(project) {
     clearTimeout(this.projectSyncHandle);
     this.projectSyncHandle = setTimeout(() => {
@@ -1729,7 +1737,7 @@ export class AdminApp {
                   .join("")}
               </div>
             `
-            : `<p class="muted">No local shader surfaces active.</p>`
+      : `<p class="muted">No local shader surfaces active.</p>`
         }
       </div>
     `;
@@ -1883,6 +1891,23 @@ export class AdminApp {
       : `<p class="muted">Select an element to inspect its geometry and roles.</p>`;
     if (!this.shouldPreservePanel("#inspector-panel", "element-color")) {
       this.root.querySelector("#inspector-panel").innerHTML = inspectorMarkup;
+    }
+  }
+
+  handleMessage(message) {
+    if (message.type !== "PROJECT_SNAPSHOT" || !this.availablePresetCatalog.length) {
+      return;
+    }
+
+    const mergedProject = this.mergePresetCatalogIntoProject(this.store.state.project);
+    if (
+      mergedProject.presetLibrary.presets.length !==
+      this.store.state.project.presetLibrary.presets.length
+    ) {
+      this.store.setProject(mergedProject, {
+        preserveSelection: true,
+        source: "catalog-merge",
+      });
     }
   }
 }
