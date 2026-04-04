@@ -1742,6 +1742,9 @@ export class AdminApp {
       </div>
     `;
 
+    const shaderSurfaceActive = selectedElement?.roles?.shaderSurface === true;
+    const interactionFieldActive = selectedElement?.roles?.interactionField === true;
+
     const inspectorMarkup = selectedElement
       ? `
         <label ${makeTitle("Human-readable name for this mapping element.")}>
@@ -1769,7 +1772,7 @@ export class AdminApp {
         <div class="field-grid">
           <label ${makeTitle("Local shader preset used when the element acts as a shader surface.")}>
             Shader preset
-            <select id="element-preset">
+            <select id="element-preset" ${shaderSurfaceActive ? "" : "disabled"}>
               ${this.renderPresetOptions(
                 state.project.presetLibrary.presets,
                 selectedElement.shaderBinding.presetId
@@ -1777,14 +1780,19 @@ export class AdminApp {
             </select>
           </label>
         </div>
+        ${
+          shaderSurfaceActive
+            ? `<p class="muted">This element reacts to interaction fields because <code>shaderSurface</code> is active.</p>`
+            : `<p class="muted">Shader preset, blend mode and reaction mode only affect elements with <code>shaderSurface</code> enabled.</p>`
+        }
         <div class="field-grid compact">
           <label ${makeTitle("Opacity of the local shader surface before additional blend and interaction effects are applied.")}>
             Shader opacity
-            <input id="shader-opacity" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.opacity}" />
+            <input id="shader-opacity" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.opacity}" ${shaderSurfaceActive ? "" : "disabled"} />
           </label>
           <label ${makeTitle("Canvas blend mode used when this shader surface is composited over the current output.")}>
             Blend mode
-            <select id="shader-blend-mode">
+            <select id="shader-blend-mode" ${shaderSurfaceActive ? "" : "disabled"}>
               <option value="normal" ${selectedElement.shaderBinding.blendMode === "normal" ? "selected" : ""}>Normal</option>
               <option value="screen" ${selectedElement.shaderBinding.blendMode === "screen" ? "selected" : ""}>Screen</option>
               <option value="add" ${selectedElement.shaderBinding.blendMode === "add" ? "selected" : ""}>Add</option>
@@ -1794,27 +1802,27 @@ export class AdminApp {
           </label>
           <label ${makeTitle("Scales the shader content within the selected surface. Useful for avoiding a flat fullscreen-clipped look.")}>
             Shader scale
-            <input id="shader-scale" type="number" min="0.25" max="3" step="0.05" value="${selectedElement.shaderBinding.scale}" />
+            <input id="shader-scale" type="number" min="0.25" max="3" step="0.05" value="${selectedElement.shaderBinding.scale}" ${shaderSurfaceActive ? "" : "disabled"} />
           </label>
           <label ${makeTitle("Rotates the mapped shader content inside the surface.")}>
             Rotation
-            <input id="shader-rotation" type="number" min="-180" max="180" step="1" value="${selectedElement.shaderBinding.rotation}" />
+            <input id="shader-rotation" type="number" min="-180" max="180" step="1" value="${selectedElement.shaderBinding.rotation}" ${shaderSurfaceActive ? "" : "disabled"} />
           </label>
           <label ${makeTitle("Offsets the local shader horizontally inside the surface. Values are relative to the surface width.")}>
             Offset X
-            <input id="shader-offset-x" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetX}" />
+            <input id="shader-offset-x" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetX}" ${shaderSurfaceActive ? "" : "disabled"} />
           </label>
           <label ${makeTitle("Offsets the local shader vertically inside the surface. Values are relative to the surface height.")}>
             Offset Y
-            <input id="shader-offset-y" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetY}" />
+            <input id="shader-offset-y" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetY}" ${shaderSurfaceActive ? "" : "disabled"} />
           </label>
           <label ${makeTitle("Controls how strongly nearby interaction fields distort, tint or pulse this shader surface.")}>
             Interaction mix
-            <input id="shader-interaction-mix" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.interactionMix}" />
+            <input id="shader-interaction-mix" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.interactionMix}" ${shaderSurfaceActive ? "" : "disabled"} />
           </label>
           <label ${makeTitle("Chooses how interaction fields affect the shader surface after the base Butterchurn frame is rendered.")}>
             Reaction mode
-            <select id="shader-reaction-mode">
+            <select id="shader-reaction-mode" ${shaderSurfaceActive ? "" : "disabled"}>
               <option value="tint" ${selectedElement.shaderBinding.reactionMode === "tint" ? "selected" : ""}>Tint</option>
               <option value="pulse" ${selectedElement.shaderBinding.reactionMode === "pulse" ? "selected" : ""}>Pulse</option>
               <option value="warp" ${selectedElement.shaderBinding.reactionMode === "warp" ? "selected" : ""}>Warp</option>
@@ -1844,6 +1852,13 @@ export class AdminApp {
         <div class="panel-header" style="padding:0">
           <h3>Interaction</h3>
         </div>
+        ${
+          interactionFieldActive && !shaderSurfaceActive
+            ? `<p class="muted">This element currently writes an interaction field, but it does not react itself. Enable <code>shaderSurface</code> as well if this same element should visibly respond.</p>`
+            : interactionFieldActive
+              ? `<p class="muted">This element both emits interaction data and can visibly react because <code>shaderSurface</code> is enabled.</p>`
+              : `<p class="muted">Enable <code>interactionField</code> if this element should influence the global layer or other shader surfaces.</p>`
+        }
         <div class="field-grid compact">
           <label ${makeTitle("Base alpha that this element writes into the interaction field buffer.")}>
             Field alpha
