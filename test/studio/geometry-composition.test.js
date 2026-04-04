@@ -9,6 +9,7 @@ import {
   interpolateQuadPoint,
   normalizeGeometry,
   pointInPolygon,
+  triangulatePolygon,
 } from "../../studio/shared/geometry.js";
 import { createDefaultProject } from "../../studio/shared/project.js";
 
@@ -53,6 +54,41 @@ describe("studio geometry and composition", () => {
 
     expect(point.x).toBeCloseTo(0.25);
     expect(point.y).toBeCloseTo(0.75);
+  });
+
+  test("triangulates convex polygons without dropping area", () => {
+    const polygon = [
+      { x: 0.1, y: 0.1 },
+      { x: 0.8, y: 0.1 },
+      { x: 0.9, y: 0.6 },
+      { x: 0.35, y: 0.85 },
+    ];
+
+    const triangles = triangulatePolygon(polygon);
+
+    expect(triangles).toHaveLength(2);
+    expect(new Set(triangles.flat())).toEqual(new Set([0, 1, 2, 3]));
+  });
+
+  test("triangulates concave polygons into valid triangle indices", () => {
+    const polygon = [
+      { x: 0.1, y: 0.15 },
+      { x: 0.85, y: 0.1 },
+      { x: 0.6, y: 0.45 },
+      { x: 0.9, y: 0.85 },
+      { x: 0.2, y: 0.8 },
+    ];
+
+    const triangles = triangulatePolygon(polygon);
+
+    expect(triangles).toHaveLength(3);
+    triangles.forEach((triangle) => {
+      expect(triangle).toHaveLength(3);
+      triangle.forEach((index) => {
+        expect(index).toBeGreaterThanOrEqual(0);
+        expect(index).toBeLessThan(polygon.length);
+      });
+    });
   });
 
   test("builds a stable render plan for global, local, paint and clip roles", () => {

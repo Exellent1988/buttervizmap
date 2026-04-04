@@ -5,6 +5,7 @@ import {
   getMaxDistanceFromCentroid,
   getPolygonCentroid,
   interpolateQuadPoint,
+  triangulatePolygon,
 } from "../../shared/geometry.js";
 import { AdaptiveRenderer } from "./adaptiveRenderer.js";
 
@@ -30,6 +31,16 @@ function fillGeometry(context, element, width, height, color, opacity, composite
   drawGeometryPath(context, element.geometry, width, height);
   context.fill();
   context.restore();
+}
+
+function applyFinalClipFill(context, clipElements, width, height, fillColor) {
+  if (!clipElements.length) {
+    return;
+  }
+
+  clipElements.forEach((element) => {
+    fillGeometry(context, element, width, height, fillColor, 1, "source-over");
+  });
 }
 
 function createCanvas(width, height) {
@@ -401,10 +412,6 @@ function drawWarpedPolygon(context, sourceCanvas, geometry, outputWidth, outputH
   }));
   const centroid = getPolygonCentroid(geometry.points);
   const maxDistance = Math.max(0.001, getMaxDistanceFromCentroid(geometry.points));
-  const centroidPixel = {
-    x: centroid.x * outputWidth,
-    y: centroid.y * outputHeight,
-  };
   const sourceCenter = {
     x: sourceCanvas.width / 2,
     y: sourceCanvas.height / 2,
@@ -420,25 +427,26 @@ function drawWarpedPolygon(context, sourceCanvas, geometry, outputWidth, outputH
       y: sourceCenter.y + Math.sin(angle) * sourceRadiusY * radius,
     };
   });
+  const triangles = triangulatePolygon(geometry.points);
 
-  for (let index = 1; index < polygonPoints.length - 1; index += 1) {
+  triangles.forEach(([firstIndex, secondIndex, thirdIndex]) => {
     drawTexturedTriangle(
       context,
       sourceCanvas,
-      sourceCenter.x,
-      sourceCenter.y,
-      sourcePoints[index].x,
-      sourcePoints[index].y,
-      sourcePoints[index + 1].x,
-      sourcePoints[index + 1].y,
-      centroidPixel.x,
-      centroidPixel.y,
-      polygonPoints[index].x,
-      polygonPoints[index].y,
-      polygonPoints[index + 1].x,
-      polygonPoints[index + 1].y
+      sourcePoints[firstIndex].x,
+      sourcePoints[firstIndex].y,
+      sourcePoints[secondIndex].x,
+      sourcePoints[secondIndex].y,
+      sourcePoints[thirdIndex].x,
+      sourcePoints[thirdIndex].y,
+      polygonPoints[firstIndex].x,
+      polygonPoints[firstIndex].y,
+      polygonPoints[secondIndex].x,
+      polygonPoints[secondIndex].y,
+      polygonPoints[thirdIndex].x,
+      polygonPoints[thirdIndex].y
     );
-  }
+  });
 }
 
 function applyInteractionBoundaryReaction({
@@ -857,6 +865,7 @@ export class StudioCompositor {
     const orderedElements = [...this.project.elements]
       .filter((element) => element.enabled)
       .sort((left, right) => left.zIndex - right.zIndex);
+    const clipElements = orderedElements.filter((element) => element.roles.clip);
 
     for (const element of orderedElements) {
       if (element.roles.paint) {
@@ -941,5 +950,12 @@ export class StudioCompositor {
       boundaryCanvas: interactionCanvases.boundary,
     });
     blendInteractionPasses(this.context, interactionCanvases, width, height, 1);
+    applyFinalClipFill(
+      this.context,
+      clipElements,
+      width,
+      height,
+      this.project.output.background ?? "#000000"
+    );
   }
 }

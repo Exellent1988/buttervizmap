@@ -63,6 +63,119 @@ export function getPolygonCentroid(points) {
   };
 }
 
+export function getSignedPolygonArea(points) {
+  let area = 0;
+
+  for (let index = 0; index < points.length; index += 1) {
+    const nextIndex = (index + 1) % points.length;
+    area +=
+      points[index].x * points[nextIndex].y - points[nextIndex].x * points[index].y;
+  }
+
+  return area / 2;
+}
+
+function getTriangleCross(a, b, c) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function pointInTriangle(point, a, b, c) {
+  const denominator =
+    (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+
+  if (Math.abs(denominator) < 1e-9) {
+    return false;
+  }
+
+  const alpha =
+    ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) /
+    denominator;
+  const beta =
+    ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) /
+    denominator;
+  const gamma = 1 - alpha - beta;
+
+  return alpha >= -1e-6 && beta >= -1e-6 && gamma >= -1e-6;
+}
+
+export function triangulatePolygon(points) {
+  if (!Array.isArray(points) || points.length < 3) {
+    return [];
+  }
+
+  if (points.length === 3) {
+    return [[0, 1, 2]];
+  }
+
+  const remaining = points.map((_, index) => index);
+  const triangles = [];
+  const orientation = Math.sign(getSignedPolygonArea(points)) || 1;
+  let guard = 0;
+
+  while (remaining.length > 3 && guard < points.length * points.length) {
+    let clippedEar = false;
+
+    for (let index = 0; index < remaining.length; index += 1) {
+      const previousIndex = remaining[(index - 1 + remaining.length) % remaining.length];
+      const currentIndex = remaining[index];
+      const nextIndex = remaining[(index + 1) % remaining.length];
+
+      const previousPoint = points[previousIndex];
+      const currentPoint = points[currentIndex];
+      const nextPoint = points[nextIndex];
+      const cross = getTriangleCross(previousPoint, currentPoint, nextPoint);
+
+      if (orientation * cross <= 1e-9) {
+        continue;
+      }
+
+      const containsOtherPoint = remaining.some((candidateIndex) => {
+        if (
+          candidateIndex === previousIndex ||
+          candidateIndex === currentIndex ||
+          candidateIndex === nextIndex
+        ) {
+          return false;
+        }
+
+        return pointInTriangle(
+          points[candidateIndex],
+          previousPoint,
+          currentPoint,
+          nextPoint
+        );
+      });
+
+      if (containsOtherPoint) {
+        continue;
+      }
+
+      triangles.push([previousIndex, currentIndex, nextIndex]);
+      remaining.splice(index, 1);
+      clippedEar = true;
+      break;
+    }
+
+    if (!clippedEar) {
+      break;
+    }
+
+    guard += 1;
+  }
+
+  if (remaining.length === 3) {
+    triangles.push([remaining[0], remaining[1], remaining[2]]);
+  }
+
+  if (!triangles.length) {
+    for (let index = 1; index < points.length - 1; index += 1) {
+      triangles.push([0, index, index + 1]);
+    }
+  }
+
+  return triangles;
+}
+
 export function pointInPolygon(point, points) {
   let inside = false;
 
