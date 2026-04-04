@@ -128,3 +128,19 @@ export function getMaxDistanceFromCentroid(points) {
   );
 }
 
+export function interpolateQuadPoint(points, u, v) {
+  const [topLeft, topRight, bottomRight, bottomLeft] = points;
+  const top = {
+    x: topLeft.x + (topRight.x - topLeft.x) * u,
+    y: topLeft.y + (topRight.y - topLeft.y) * u,
+  };
+  const bottom = {
+    x: bottomLeft.x + (bottomRight.x - bottomLeft.x) * u,
+    y: bottomLeft.y + (bottomRight.y - bottomLeft.y) * u,
+  };
+
+  return {
+    x: top.x + (bottom.x - top.x) * v,
+    y: top.y + (bottom.y - top.y) * v,
+  };
+}

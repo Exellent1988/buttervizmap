@@ -1,9 +1,10 @@
-import { buildInteractionSummary } from "../../shared/composition.js";
+import { buildBoundarySummary, buildInteractionSummary } from "../../shared/composition.js";
 import {
   distanceToPolygonEdge,
   getPolygonBounds,
   getMaxDistanceFromCentroid,
   getPolygonCentroid,
+  interpolateQuadPoint,
 } from "../../shared/geometry.js";
 import { AdaptiveRenderer } from "./adaptiveRenderer.js";
 
@@ -38,6 +39,10 @@ function createCanvas(width, height) {
   return canvas;
 }
 
+function createSizedCanvas(width, height) {
+  return createCanvas(Math.max(1, Math.round(width)), Math.max(1, Math.round(height)));
+}
+
 function blendInteractionPasses(context, interactionCanvases, width, height, intensity = 1) {
   context.save();
   context.globalCompositeOperation = "screen";
@@ -49,6 +54,9 @@ function blendInteractionPasses(context, interactionCanvases, width, height, int
   context.globalCompositeOperation = "overlay";
   context.globalAlpha = 0.2 * intensity;
   context.drawImage(interactionCanvases.mask, 0, 0, width, height);
+  context.globalCompositeOperation = "screen";
+  context.globalAlpha = 0.14 * intensity;
+  context.drawImage(interactionCanvases.boundary, 0, 0, width, height);
   context.restore();
 }
 
@@ -66,6 +74,12 @@ function mapBlendMode(mode = "normal") {
     return "overlay";
   }
   return "source-over";
+}
+
+function createCanvasSnapshot(canvas) {
+  const snapshot = createSizedCanvas(canvas.width, canvas.height);
+  snapshot.getContext("2d").drawImage(canvas, 0, 0);
+  return snapshot;
 }
 
 function normalizeToBounds(value, min, size) {
@@ -152,6 +166,50 @@ function summarizeInteraction(interactionSummary) {
   };
 }
 
+function buildSurfaceEffectCanvas({
+  sourceCanvas,
+  binding,
+  interactionState,
+  timestamp,
+  width,
+  height,
+  interactionSummary = [],
+}) {
+  const effectCanvas = createSizedCanvas(width, height);
+  const effectContext = effectCanvas.getContext("2d");
+  effectContext.clearRect(0, 0, width, height);
+  const effectBinding = {
+    ...binding,
+    opacity: 1,
+    blendMode: "normal",
+  };
+  drawCanvasWithBinding({
+    context: effectContext,
+    sourceCanvas,
+    drawX: 0,
+    drawY: 0,
+    drawWidth: width,
+    drawHeight: height,
+    binding: effectBinding,
+    interactionState,
+    timestamp,
+  });
+
+  if (interactionSummary.length && (binding.interactionMix ?? 0) > 0.001) {
+    const snapshot = createCanvasSnapshot(effectCanvas);
+    renderInteractionBoundaryEcho({
+      context: effectContext,
+      sourceCanvas: snapshot,
+      interactionSummary,
+      width,
+      height,
+      intensity: binding.interactionMix,
+    });
+  }
+
+  return effectCanvas;
+}
+
 function renderInteractionBoundaryEcho({
   context,
   sourceCanvas,
@@ -208,6 +266,189 @@ function renderInteractionBoundaryEcho({
   context.globalAlpha = 0.06 + intensity * 0.12;
   context.drawImage(edgeCanvas, -shiftX, -shiftY, width, height);
   context.restore();
+}
+
+function drawTexturedTriangle(
+  context,
+  image,
+  sx0,
+  sy0,
+  sx1,
+  sy1,
+  sx2,
+  sy2,
+  dx0,
+  dy0,
+  dx1,
+  dy1,
+  dx2,
+  dy2
+) {
+  const determinant = sx0 * (sy1 - sy2) + sx1 * (sy2 - sy0) + sx2 * (sy0 - sy1);
+  if (Math.abs(determinant) < 1e-6) {
+    return;
+  }
+
+  const a =
+    (dx0 * (sy1 - sy2) + dx1 * (sy2 - sy0) + dx2 * (sy0 - sy1)) / determinant;
+  const b =
+    (dy0 * (sy1 - sy2) + dy1 * (sy2 - sy0) + dy2 * (sy0 - sy1)) / determinant;
+  const c =
+    (dx0 * (sx2 - sx1) + dx1 * (sx0 - sx2) + dx2 * (sx1 - sx0)) / determinant;
+  const d =
+    (dy0 * (sx2 - sx1) + dy1 * (sx0 - sx2) + dy2 * (sx1 - sx0)) / determinant;
+  const e =
+    (dx0 * (sx1 * sy2 - sx2 * sy1) +
+      dx1 * (sx2 * sy0 - sx0 * sy2) +
+      dx2 * (sx0 * sy1 - sx1 * sy0)) /
+    determinant;
+  const f =
+    (dy0 * (sx1 * sy2 - sx2 * sy1) +
+      dy1 * (sx2 * sy0 - sx0 * sy2) +
+      dy2 * (sx0 * sy1 - sx1 * sy0)) /
+    determinant;
+
+  context.save();
+  context.beginPath();
+  context.moveTo(dx0, dy0);
+  context.lineTo(dx1, dy1);
+  context.lineTo(dx2, dy2);
+  context.closePath();
+  context.clip();
+  context.transform(a, b, c, d, e, f);
+  context.drawImage(image, 0, 0);
+  context.restore();
+}
+
+function drawWarpedQuad(context, sourceCanvas, geometry, outputWidth, outputHeight) {
+  const subdivisions = 14;
+  const pixelPoints = geometry.points.map((point) => ({
+    x: point.x * outputWidth,
+    y: point.y * outputHeight,
+  }));
+
+  for (let yIndex = 0; yIndex < subdivisions; yIndex += 1) {
+    const v0 = yIndex / subdivisions;
+    const v1 = (yIndex + 1) / subdivisions;
+    const sy0 = sourceCanvas.height * v0;
+    const sy1 = sourceCanvas.height * v1;
+
+    for (let xIndex = 0; xIndex < subdivisions; xIndex += 1) {
+      const u0 = xIndex / subdivisions;
+      const u1 = (xIndex + 1) / subdivisions;
+      const sx0 = sourceCanvas.width * u0;
+      const sx1 = sourceCanvas.width * u1;
+
+      const topLeft = interpolateQuadPoint(pixelPoints, u0, v0);
+      const topRight = interpolateQuadPoint(pixelPoints, u1, v0);
+      const bottomRight = interpolateQuadPoint(pixelPoints, u1, v1);
+      const bottomLeft = interpolateQuadPoint(pixelPoints, u0, v1);
+
+      drawTexturedTriangle(
+        context,
+        sourceCanvas,
+        sx0,
+        sy0,
+        sx1,
+        sy0,
+        sx1,
+        sy1,
+        topLeft.x,
+        topLeft.y,
+        topRight.x,
+        topRight.y,
+        bottomRight.x,
+        bottomRight.y
+      );
+      drawTexturedTriangle(
+        context,
+        sourceCanvas,
+        sx0,
+        sy0,
+        sx1,
+        sy1,
+        sx0,
+        sy1,
+        topLeft.x,
+        topLeft.y,
+        bottomRight.x,
+        bottomRight.y,
+        bottomLeft.x,
+        bottomLeft.y
+      );
+    }
+  }
+}
+
+function drawWarpedPolygon(context, sourceCanvas, geometry, outputWidth, outputHeight) {
+  const bounds = getPolygonBounds(geometry.points);
+  const localWidth = Math.max(bounds.maxX - bounds.minX, 0.001);
+  const localHeight = Math.max(bounds.maxY - bounds.minY, 0.001);
+  const polygonPoints = geometry.points.map((point) => ({
+    x: point.x * outputWidth,
+    y: point.y * outputHeight,
+  }));
+  const sourcePoints = geometry.points.map((point) => ({
+    x: ((point.x - bounds.minX) / localWidth) * sourceCanvas.width,
+    y: ((point.y - bounds.minY) / localHeight) * sourceCanvas.height,
+  }));
+
+  for (let index = 1; index < polygonPoints.length - 1; index += 1) {
+    drawTexturedTriangle(
+      context,
+      sourceCanvas,
+      sourcePoints[0].x,
+      sourcePoints[0].y,
+      sourcePoints[index].x,
+      sourcePoints[index].y,
+      sourcePoints[index + 1].x,
+      sourcePoints[index + 1].y,
+      polygonPoints[0].x,
+      polygonPoints[0].y,
+      polygonPoints[index].x,
+      polygonPoints[index].y,
+      polygonPoints[index + 1].x,
+      polygonPoints[index + 1].y
+    );
+  }
+}
+
+function applyInteractionBoundaryReaction({
+  context,
+  width,
+  height,
+  interactionSummary,
+  intensity,
+  boundaryCanvas = null,
+}) {
+  if (!interactionSummary.length || intensity <= 0.001) {
+    return;
+  }
+
+  const sourceSnapshot = createSizedCanvas(width, height);
+  sourceSnapshot.getContext("2d").drawImage(context.canvas, 0, 0);
+  renderInteractionBoundaryEcho({
+    context,
+    sourceCanvas: sourceSnapshot,
+    interactionSummary,
+    width,
+    height,
+    intensity,
+  });
+
+  if (boundaryCanvas) {
+    const interactionState = summarizeInteraction(interactionSummary);
+    const tangentX = -interactionState.offsetY * width * 0.16;
+    const tangentY = interactionState.offsetX * height * 0.16;
+
+    context.save();
+    context.globalCompositeOperation = "lighter";
+    context.globalAlpha = 0.08 + intensity * 0.16;
+    context.drawImage(boundaryCanvas, tangentX, tangentY, width, height);
+    context.globalAlpha = 0.05 + intensity * 0.12;
+    context.drawImage(boundaryCanvas, -tangentX, -tangentY, width, height);
+    context.restore();
+  }
 }
 
 function drawCanvasWithBinding({
@@ -283,6 +524,29 @@ function drawCanvasWithBinding({
         drawWidth * growth,
         drawHeight * growth
       );
+    } else if (binding.reactionMode === "reflect") {
+      const reflectX = interactionState.offsetX * drawWidth * 0.2;
+      const reflectY = interactionState.offsetY * drawHeight * 0.2;
+      context.globalCompositeOperation = "screen";
+      context.globalAlpha = 0.12 + reactionMix * 0.24;
+      context.scale(-1, 1);
+      context.drawImage(
+        sourceCanvas,
+        drawWidth / 2 - reflectX,
+        -drawHeight / 2 - reflectY,
+        drawWidth,
+        drawHeight
+      );
+      context.scale(-1, 1);
+      context.globalCompositeOperation = "lighter";
+      context.globalAlpha = 0.08 + reactionMix * 0.18;
+      context.drawImage(
+        sourceCanvas,
+        -drawWidth / 2 - reflectX,
+        -drawHeight / 2 - reflectY,
+        drawWidth,
+        drawHeight
+      );
     }
 
     context.globalCompositeOperation = "soft-light";
@@ -306,6 +570,7 @@ export class StudioCompositor {
       mask: createCanvas(1, 1),
       color: createCanvas(1, 1),
       distance: createCanvas(1, 1),
+      boundary: createCanvas(1, 1),
     };
     this.loadedPresetIds = {
       global: null,
@@ -343,7 +608,7 @@ export class StudioCompositor {
       (preset) => preset.id === this.project.globalLayer.presetId
     );
     if (globalPreset && this.loadedPresetIds.global !== globalPreset.id) {
-      await this.globalRenderer.loadPreset(
+      const didLoad = await this.globalRenderer.loadPreset(
         globalPreset,
         this.loadedPresetIds.global == null
           ? 0
@@ -351,7 +616,9 @@ export class StudioCompositor {
             ? this.project.output.presets.autoBlendSeconds
             : this.project.output.presets.userBlendSeconds
       );
-      this.loadedPresetIds.global = globalPreset.id;
+      if (didLoad) {
+        this.loadedPresetIds.global = globalPreset.id;
+      }
     }
 
     const activeShaderElements = this.project.elements.filter(
@@ -368,13 +635,15 @@ export class StudioCompositor {
         (entry) => entry.id === element.shaderBinding.presetId
       );
       if (preset && this.loadedPresetIds.elements.get(element.id) !== preset.id) {
-        await renderer.loadPreset(
+        const didLoad = await renderer.loadPreset(
           preset,
           this.loadedPresetIds.elements.has(element.id)
             ? this.project.output.presets.userBlendSeconds
             : 0
         );
-        this.loadedPresetIds.elements.set(element.id, preset.id);
+        if (didLoad) {
+          this.loadedPresetIds.elements.set(element.id, preset.id);
+        }
       }
     }
 
@@ -386,6 +655,7 @@ export class StudioCompositor {
   }
 
   getDebugState() {
+    const presetCatalog = this.project?.presetLibrary?.presets ?? [];
     return {
       globalRenderer: this.globalRenderer?.getDebugState?.() ?? null,
       elementRenderers: [...this.elementRenderers.entries()].map(([elementId, renderer]) => ({
@@ -395,6 +665,12 @@ export class StudioCompositor {
       loadedPresetIds: {
         global: this.loadedPresetIds.global,
         elements: Object.fromEntries(this.loadedPresetIds.elements.entries()),
+      },
+      presetCatalogSummary: {
+        total: presetCatalog.length,
+        solid: presetCatalog.filter((preset) => preset.sourceType === "solid").length,
+        builtin: presetCatalog.filter((preset) => preset.sourceType === "builtin").length,
+        file: presetCatalog.filter((preset) => preset.sourceType === "file").length,
       },
     };
   }
@@ -421,8 +697,9 @@ export class StudioCompositor {
     const maskContext = this.interactionCanvases.mask.getContext("2d");
     const colorContext = this.interactionCanvases.color.getContext("2d");
     const distanceContext = this.interactionCanvases.distance.getContext("2d");
+    const boundaryContext = this.interactionCanvases.boundary.getContext("2d");
 
-    [maskContext, colorContext, distanceContext].forEach((context) =>
+    [maskContext, colorContext, distanceContext, boundaryContext].forEach((context) =>
       context.clearRect(0, 0, width, height)
     );
 
@@ -456,6 +733,19 @@ export class StudioCompositor {
       distanceContext.fillStyle = gradient;
       distanceContext.fillRect(0, 0, width, height);
       distanceContext.restore();
+
+      boundaryContext.save();
+      boundaryContext.lineJoin = "round";
+      boundaryContext.lineCap = "round";
+      boundaryContext.strokeStyle = `rgba(255,255,255,${Math.min(
+        0.9,
+        0.28 + field.alpha * field.influence
+      )})`;
+      boundaryContext.lineWidth =
+        Math.max(2, Math.min(width, height) * 0.005) * (1 + field.distance + field.pulse);
+      drawGeometryPath(boundaryContext, element.geometry, width, height);
+      boundaryContext.stroke();
+      boundaryContext.restore();
     });
 
     return this.interactionCanvases;
@@ -480,8 +770,17 @@ export class StudioCompositor {
         field.geometry.points
       ),
     }));
+    const boundarySummary = buildBoundarySummary(this.project).map((field) => ({
+      ...field,
+      centroid: getPolygonCentroid(field.geometry.points),
+      maxDistance: getMaxDistanceFromCentroid(field.geometry.points),
+      edgeDistanceAtCentroid: distanceToPolygonEdge(
+        getPolygonCentroid(field.geometry.points),
+        field.geometry.points
+      ),
+    }));
 
-    const interactionCanvases = this.renderInteractionPass(interactionSummary);
+    const interactionCanvases = this.renderInteractionPass(boundarySummary);
 
     this.context.clearRect(0, 0, width, height);
     this.context.fillStyle = this.project.output.background;
@@ -494,15 +793,8 @@ export class StudioCompositor {
         audioFrame: this.audioFrame,
         interactionSummary,
       });
-      this.context.save();
-      this.context.globalAlpha = this.project.globalLayer.opacity;
-      drawCanvasWithBinding({
-        context: this.context,
+      const globalSurface = buildSurfaceEffectCanvas({
         sourceCanvas: this.globalRenderer.getCanvas(),
-        drawX: 0,
-        drawY: 0,
-        drawWidth: width,
-        drawHeight: height,
         binding: {
           opacity: this.project.globalLayer.opacity,
           blendMode: "normal",
@@ -515,14 +807,20 @@ export class StudioCompositor {
         },
         interactionState: globalInteraction,
         timestamp,
-      });
-      renderInteractionBoundaryEcho({
-        context: this.context,
-        sourceCanvas: this.globalRenderer.getCanvas(),
-        interactionSummary,
         width,
         height,
+        interactionSummary: boundarySummary,
+      });
+      this.context.save();
+      this.context.globalAlpha = this.project.globalLayer.opacity;
+      this.context.drawImage(globalSurface, 0, 0, width, height);
+      applyInteractionBoundaryReaction({
+        context: this.context,
+        width,
+        height,
+        interactionSummary: boundarySummary,
         intensity: this.project.globalLayer.interactionMix,
+        boundaryCanvas: interactionCanvases.boundary,
       });
       this.context.restore();
       blendInteractionPasses(this.context, interactionCanvases, width, height, 0.9);
@@ -557,34 +855,32 @@ export class StudioCompositor {
             interactionSummary,
             bounds
           );
+          const localBoundarySummary = remapInteractionSummaryToBounds(boundarySummary, bounds);
           await renderer.render({
             timestamp,
             audioFrame: this.audioFrame,
             interactionSummary: localInteractionSummary,
           });
           const localInteraction = summarizeInteraction(localInteractionSummary);
-          this.context.save();
-          drawGeometryPath(this.context, element.geometry, width, height);
-          this.context.clip();
-          drawCanvasWithBinding({
-            context: this.context,
+          const surfaceCanvas = buildSurfaceEffectCanvas({
             sourceCanvas: renderer.getCanvas(),
-            drawX,
-            drawY,
-            drawWidth,
-            drawHeight,
             binding: element.shaderBinding,
             interactionState: localInteraction,
             timestamp,
-          });
-          renderInteractionBoundaryEcho({
-            context: this.context,
-            sourceCanvas: renderer.getCanvas(),
-            interactionSummary: localInteractionSummary,
             width: drawWidth,
             height: drawHeight,
-            intensity: element.shaderBinding.interactionMix,
+            interactionSummary: localBoundarySummary,
           });
+          this.context.save();
+          if (element.geometry.kind === "quad") {
+            this.context.globalAlpha = element.shaderBinding.opacity;
+            this.context.globalCompositeOperation = mapBlendMode(element.shaderBinding.blendMode);
+            drawWarpedQuad(this.context, surfaceCanvas, element.geometry, width, height);
+          } else {
+            this.context.globalCompositeOperation = mapBlendMode(element.shaderBinding.blendMode);
+            this.context.globalAlpha = element.shaderBinding.opacity;
+            drawWarpedPolygon(this.context, surfaceCanvas, element.geometry, width, height);
+          }
           blendInteractionPasses(this.context, interactionCanvases, width, height, 1.2);
           this.context.restore();
         }
@@ -603,6 +899,19 @@ export class StudioCompositor {
       }
     }
 
+    applyInteractionBoundaryReaction({
+      context: this.context,
+      width,
+      height,
+      interactionSummary: boundarySummary,
+      intensity: Math.max(
+        this.project.globalLayer.interactionMix,
+        ...orderedElements
+          .filter((element) => element.roles.shaderSurface && element.shaderBinding.enabled)
+          .map((element) => element.shaderBinding.interactionMix ?? 0)
+      ),
+      boundaryCanvas: interactionCanvases.boundary,
+    });
     blendInteractionPasses(this.context, interactionCanvases, width, height, 1);
   }
 }

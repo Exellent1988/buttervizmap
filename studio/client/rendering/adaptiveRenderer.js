@@ -3,13 +3,22 @@ import { MockRenderer } from "./mockRenderer.js";
 
 let butterchurnPromise = null;
 const remotePresetCache = new Map();
+const SILENT_AUDIO_FRAME = {
+  frame: 0,
+  timeByteArray: new Uint8Array(1024).fill(128),
+  timeByteArrayL: new Uint8Array(1024).fill(128),
+  timeByteArrayR: new Uint8Array(1024).fill(128),
+};
 
 async function loadButterchurnModule() {
   if (!butterchurnPromise) {
     butterchurnPromise = (async () => {
       for (const candidatePath of ["/dist/butterchurn.min.js", "/dist/butterchurn.js"]) {
         try {
-          return await import(candidatePath);
+          return {
+            module: await import(candidatePath),
+            bundlePath: candidatePath,
+          };
         } catch (error) {
           // try the next bundle path
         }
@@ -69,6 +78,22 @@ export class AdaptiveRenderer {
     };
     this.lastError = null;
     this.lastPresetInfo = null;
+    this.bundlePath = null;
+    this.fallbackMode = null;
+    this.activePreset = null;
+    this.lastRequestedPreset = null;
+    this.lastFailedPresetId = null;
+    this.hasRenderedCurrentPreset = false;
+  }
+
+  applyRendererSize() {
+    this.runtime.visualizer.setRendererSize(this.width, this.height, {
+      pixelRatio: 1,
+      textureRatio: this.renderConfig.canvasScale,
+      meshWidth: this.renderConfig.meshWidth,
+      meshHeight: this.renderConfig.meshHeight,
+    });
+    this.runtime.visualizer.setCanvas(this.runtime.canvas);
   }
 
   async init() {
@@ -76,15 +101,16 @@ export class AdaptiveRenderer {
       return;
     }
 
-    const butterchurnModule = await loadButterchurnModule();
-    if (butterchurnModule?.default?.createVisualizer) {
+    const butterchurnBundle = await loadButterchurnModule();
+    if (butterchurnBundle?.module?.default?.createVisualizer) {
       const outputCanvas = document.createElement("canvas");
       outputCanvas.width = this.width;
       outputCanvas.height = this.height;
+      this.bundlePath = butterchurnBundle.bundlePath;
       this.runtime = {
         type: "butterchurn",
         canvas: outputCanvas,
-        visualizer: butterchurnModule.default.createVisualizer(null, outputCanvas, {
+        visualizer: butterchurnBundle.module.default.createVisualizer(null, outputCanvas, {
           width: this.width,
           height: this.height,
           pixelRatio: 1,
@@ -110,13 +136,15 @@ export class AdaptiveRenderer {
     if (this.runtime?.type === "butterchurn") {
       this.runtime.canvas.width = width;
       this.runtime.canvas.height = height;
-      this.runtime.visualizer.setRendererSize(width, height, {
-        pixelRatio: 1,
-        textureRatio: this.renderConfig.canvasScale,
-        meshWidth: this.renderConfig.meshWidth,
-        meshHeight: this.renderConfig.meshHeight,
-      });
-      this.runtime.visualizer.setCanvas(this.runtime.canvas);
+      try {
+        if (this.currentPreset && this.hasRenderedCurrentPreset) {
+          this.applyRendererSize();
+        }
+      } catch (error) {
+        this.lastError =
+          error instanceof Error ? error.message : `Resize failed: ${String(error)}`;
+        this.runtimeMode = "error";
+      }
     }
   }
 
@@ -128,26 +156,38 @@ export class AdaptiveRenderer {
 
     await this.init();
     if (this.runtime?.type === "butterchurn") {
-      this.runtime.visualizer.setRendererSize(this.width, this.height, {
-        pixelRatio: 1,
-        textureRatio: this.renderConfig.canvasScale,
-        meshWidth: this.renderConfig.meshWidth,
-        meshHeight: this.renderConfig.meshHeight,
-      });
-      this.runtime.visualizer.setCanvas(this.runtime.canvas);
+      try {
+        if (this.currentPreset && this.hasRenderedCurrentPreset) {
+          this.applyRendererSize();
+        }
+      } catch (error) {
+        this.lastError =
+          error instanceof Error ? error.message : `Render config update failed: ${String(error)}`;
+        this.runtimeMode = "error";
+      }
     }
   }
 
   async loadPreset(presetEntry, blendTime = 0) {
-    this.currentPreset = presetEntry;
+    if (this.lastFailedPresetId === presetEntry?.id && this.currentPreset?.id !== presetEntry?.id) {
+      this.lastRequestedPreset = presetEntry;
+      this.runtimeMode = "error";
+      return false;
+    }
+
+    this.lastRequestedPreset = presetEntry;
     this.mockRenderer.loadPreset(presetEntry);
-    this.forceMock = presetEntry?.sourceType === "solid";
+    this.forceMock = presetEntry?.sourceType === "solid" || presetEntry?.sourceType === "builtin";
+    this.fallbackMode = presetEntry?.sourceType === "solid" ? "solid" : this.forceMock ? "mock" : null;
     this.lastError = null;
     await this.init();
     if (this.runtime?.type === "butterchurn" && !this.forceMock) {
       try {
         const preset = await resolvePresetRuntime(presetEntry);
         await this.runtime.visualizer.loadPreset(preset, blendTime);
+        this.currentPreset = presetEntry;
+        this.activePreset = presetEntry;
+        this.hasRenderedCurrentPreset = false;
         this.lastPresetInfo = {
           presetId: presetEntry.id,
           presetName: presetEntry.name,
@@ -155,16 +195,30 @@ export class AdaptiveRenderer {
           blendTime,
           loadedAt: new Date().toISOString(),
         };
+        this.runtimeMode = "butterchurn";
+        this.lastFailedPresetId = null;
+        this.runtime.visualizer.render({
+          audioLevels: SILENT_AUDIO_FRAME,
+          elapsedTime: 0,
+        });
+        this.hasRenderedCurrentPreset = true;
+        this.applyRendererSize();
+        return true;
       } catch (error) {
         this.runtimeMode = "error";
+        this.lastFailedPresetId = presetEntry?.id ?? null;
         this.lastError = error instanceof Error ? error.message : String(error);
         console.error("ButterVizMap preset load failed", {
           presetId: presetEntry.id,
           sourcePresetId: presetEntry.sourcePresetId,
           error,
         });
+        return false;
       }
     } else if (this.forceMock) {
+      this.currentPreset = presetEntry;
+      this.activePreset = presetEntry;
+      this.hasRenderedCurrentPreset = true;
       this.lastPresetInfo = {
         presetId: presetEntry.id,
         presetName: presetEntry.name,
@@ -172,16 +226,21 @@ export class AdaptiveRenderer {
         blendTime,
         loadedAt: new Date().toISOString(),
       };
+      this.lastFailedPresetId = null;
+      return true;
     }
+
+    return false;
   }
 
   async render({ timestamp, audioFrame, interactionSummary }) {
     this.mockRenderer.render({ timestamp, audioFrame, interactionSummary });
     if (this.runtime?.type === "butterchurn" && this.currentPreset && !this.forceMock) {
       this.runtime.visualizer.render({
-        audioLevels: audioFrame,
+        audioLevels: audioFrame ?? SILENT_AUDIO_FRAME,
         elapsedTime: timestamp * 0.001,
       });
+      this.hasRenderedCurrentPreset = true;
     }
   }
 
@@ -195,7 +254,7 @@ export class AdaptiveRenderer {
 
   getRuntimeMode() {
     if (this.forceMock) {
-      return "solid";
+      return this.fallbackMode ?? "mock";
     }
 
     return this.runtimeMode;
@@ -206,8 +265,15 @@ export class AdaptiveRenderer {
       runtimeMode: this.getRuntimeMode(),
       currentPresetId: this.currentPreset?.id ?? null,
       currentPresetName: this.currentPreset?.name ?? null,
+      activePresetId: this.activePreset?.id ?? null,
+      activePresetName: this.activePreset?.name ?? null,
+      requestedPresetId: this.lastRequestedPreset?.id ?? null,
+      requestedPresetName: this.lastRequestedPreset?.name ?? null,
+      fallbackMode: this.fallbackMode,
+      lastFailedPresetId: this.lastFailedPresetId,
       lastPresetInfo: this.lastPresetInfo,
       lastError: this.lastError,
+      bundlePath: this.bundlePath,
       renderConfig: { ...this.renderConfig },
     };
   }

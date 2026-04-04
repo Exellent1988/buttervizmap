@@ -34,6 +34,12 @@ const PRESET_ROOTS = [
     root: path.resolve(REPO_ROOT, "experiments/wasm-eel/presets"),
   },
 ];
+const PARITY_PRESET_PATTERNS = [
+  /unchained\s*-\s*rewop/i,
+  /aderrasi\s*-\s*potion of spirits/i,
+  /mindblob mix/i,
+  /spiral artifact/i,
+];
 
 function getPresetMeta(fileName) {
   const label = fileName.replace(/\.json$/i, "");
@@ -41,6 +47,7 @@ function getPresetMeta(fileName) {
   return {
     author,
     category: "repo",
+    parityTarget: PARITY_PRESET_PATTERNS.some((pattern) => pattern.test(label)),
   };
 }
 
@@ -120,6 +127,21 @@ async function readPresetFile(fileName) {
   }
 
   throw new Error(`Preset not found: ${fileName}`);
+}
+
+function summarizePresetCatalog(presets) {
+  return {
+    total: presets.length,
+    bySourceType: presets.reduce((accumulator, preset) => {
+      accumulator[preset.sourceType] = (accumulator[preset.sourceType] ?? 0) + 1;
+      return accumulator;
+    }, {}),
+    byPack: presets.reduce((accumulator, preset) => {
+      const pack = preset.meta?.pack ?? "unknown";
+      accumulator[pack] = (accumulator[pack] ?? 0) + 1;
+      return accumulator;
+    }, {}),
+  };
 }
 
 function getContentType(filePath) {
@@ -224,10 +246,12 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
       allowedRoot = path.join(REPO_ROOT, "dist");
     } else if (url.pathname === "/api/presets") {
       try {
+        const presets = await getPresetCatalog();
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         response.end(
           JSON.stringify({
-            presets: await getPresetCatalog(),
+            presets,
+            summary: summarizePresetCatalog(presets),
           })
         );
       } catch (error) {
@@ -315,7 +339,13 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
 
         if (activeRole === "admin") {
           activeSession.adminPeer = peer;
-          activeSession.project = await ensureProjectCatalog(activeSession.project);
+          if (message.payload.project) {
+            activeSession.project = await ensureProjectCatalog(
+              normalizeProject(message.payload.project)
+            );
+          } else {
+            activeSession.project = await ensureProjectCatalog(activeSession.project);
+          }
           send(peer, {
             type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
             payload: {
@@ -323,6 +353,15 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
               project: activeSession.project,
             },
           });
+          activeSession.viewerPeers.forEach((viewerPeer) =>
+            send(viewerPeer, {
+              type: MESSAGE_TYPES.PROJECT_SNAPSHOT,
+              payload: {
+                sessionId: activeSession.sessionId,
+                project: activeSession.project,
+              },
+            })
+          );
         } else {
           activeSession.viewerPeers.add(peer);
           activeSession.project = await ensureProjectCatalog(activeSession.project);

@@ -12,6 +12,7 @@ The repository still contains the original Butterchurn rendering engine, but now
 - project import/export
 - scene recall
 - polygon and quad elements with clip, paint, shader-surface and interaction roles
+- admin-master audio sync for LAN viewers
 
 ## Studio Quick Start
 
@@ -37,6 +38,8 @@ Open:
 
 - `http://localhost:4177/admin` for the control panel
 - `http://<your-lan-ip>:4177/output/<sessionId>` for output viewers on the same network
+
+The admin panel is the master runtime. Audio analysis is captured on the admin machine and synchronized to output viewers, so a second device showing `/output/:sessionId` does not need local microphone access.
 
 ## Docker Deployment
 

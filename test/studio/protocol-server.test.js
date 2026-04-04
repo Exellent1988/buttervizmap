@@ -171,6 +171,61 @@ describe("studio protocol and LAN sync server", () => {
     await Promise.all([waitForSocketClose(adminSocket), waitForSocketClose(viewerSocket)]);
   });
 
+  test("uses the admin hello project as the authoritative session snapshot", async () => {
+    if (listenError) {
+      expect(listenError.code).toBe("EPERM");
+      return;
+    }
+
+    const sessionId = "studio-admin-hello-sync";
+    const viewerSocket = new WebSocket(`ws://127.0.0.1:${serverInfo.port}/ws`);
+    await waitForSocketOpen(viewerSocket);
+    const viewerInitialSnapshotPromise = waitForSocketMessage(
+      viewerSocket,
+      MESSAGE_TYPES.PROJECT_SNAPSHOT
+    );
+    viewerSocket.send(
+      serializeSocketMessage({
+        type: MESSAGE_TYPES.HELLO,
+        payload: { role: "viewer", sessionId },
+      })
+    );
+    const initialViewerSnapshot = await viewerInitialSnapshotPromise;
+
+    const adminSocket = new WebSocket(`ws://127.0.0.1:${serverInfo.port}/ws`);
+    await waitForSocketOpen(adminSocket);
+    const adminProject = createDefaultProject();
+    adminProject.meta.name = "Authoritative Admin Project";
+    adminProject.globalLayer.presetId = "solar-curtain";
+
+    const adminSnapshotPromise = waitForSocketMessage(
+      adminSocket,
+      MESSAGE_TYPES.PROJECT_SNAPSHOT
+    );
+    const viewerUpdatedSnapshotPromise = waitForSocketMessage(
+      viewerSocket,
+      MESSAGE_TYPES.PROJECT_SNAPSHOT
+    );
+    adminSocket.send(
+      serializeSocketMessage({
+        type: MESSAGE_TYPES.HELLO,
+        payload: { role: "admin", sessionId, project: adminProject },
+      })
+    );
+
+    const adminSnapshot = await adminSnapshotPromise;
+    const viewerUpdatedSnapshot = await viewerUpdatedSnapshotPromise;
+
+    expect(initialViewerSnapshot.payload.project.meta.name).not.toBe("Authoritative Admin Project");
+    expect(adminSnapshot.payload.project.meta.name).toBe("Authoritative Admin Project");
+    expect(viewerUpdatedSnapshot.payload.project.meta.name).toBe("Authoritative Admin Project");
+    expect(viewerUpdatedSnapshot.payload.project.globalLayer.presetId).toBe("solar-curtain");
+
+    adminSocket.close();
+    viewerSocket.close();
+    await Promise.all([waitForSocketClose(adminSocket), waitForSocketClose(viewerSocket)]);
+  });
+
   test("serves the repo preset catalog over HTTP", async () => {
     if (listenError) {
       expect(listenError.code).toBe("EPERM");
@@ -183,6 +238,14 @@ describe("studio protocol and LAN sync server", () => {
     expect(response.ok).toBe(true);
     expect(Array.isArray(payload.presets)).toBe(true);
     expect(payload.presets.length).toBeGreaterThan(400);
+    expect(payload.presets.some((preset) => preset.meta?.parityTarget === true)).toBe(true);
+    expect(payload.summary).toEqual(
+      expect.objectContaining({
+        total: expect.any(Number),
+        bySourceType: expect.any(Object),
+        byPack: expect.any(Object),
+      })
+    );
     expect(payload.presets[0]).toEqual(
       expect.objectContaining({
         sourceType: "file",

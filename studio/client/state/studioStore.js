@@ -4,8 +4,9 @@ import {
   createDefaultProject,
   createSceneElement,
   duplicatePresetEntry,
-  normalizeProject,
-  parseProject,
+  normalizeProjectWithDiagnostics,
+  normalizeSceneElement,
+  parseProjectBundle,
   serializeProject,
 } from "../../shared/project.js";
 
@@ -24,6 +25,8 @@ export class StudioStore {
       lastAudioFrame: null,
       autosaveStatus: role === "admin" ? "idle" : "disabled",
       lastSavedAt: null,
+      projectDiagnostics: null,
+      autosaveError: null,
     };
 
     if (role === "admin") {
@@ -58,7 +61,11 @@ export class StudioStore {
   }
 
   setProject(project, options = {}) {
-    this.state.project = normalizeProject(project);
+    const bundle = options.bundle ?? normalizeProjectWithDiagnostics(project, {
+      source: options.source,
+    });
+    this.state.project = bundle.project;
+    this.state.projectDiagnostics = bundle.diagnostics;
     if (!options.preserveSelection) {
       this.state.selectedElementId =
         this.state.project.elements[0]?.id ?? this.state.selectedElementId;
@@ -87,10 +94,13 @@ export class StudioStore {
     }
 
     try {
-      this.state.project = parseProject(serializedProject);
+      const bundle = parseProjectBundle(serializedProject, { source: "autosave" });
+      this.state.project = bundle.project;
+      this.state.projectDiagnostics = bundle.diagnostics;
       this.state.autosaveStatus = "loaded";
     } catch (error) {
       this.state.autosaveStatus = "error";
+      this.state.autosaveError = error instanceof Error ? error.message : String(error);
       console.warn("Failed to load ButterVizMap autosave", error);
     }
   }
@@ -100,8 +110,10 @@ export class StudioStore {
       localStorage.setItem(AUTOSAVE_KEY, serializeProject(this.state.project));
       this.state.autosaveStatus = "saved";
       this.state.lastSavedAt = new Date().toISOString();
+      this.state.autosaveError = null;
     } catch (error) {
       this.state.autosaveStatus = "error";
+      this.state.autosaveError = error instanceof Error ? error.message : String(error);
       console.warn("Failed to save ButterVizMap autosave", error);
     }
   }
@@ -111,7 +123,8 @@ export class StudioStore {
   }
 
   importProject(serializedProject) {
-    this.setProject(parseProject(serializedProject));
+    const bundle = parseProjectBundle(serializedProject, { source: "import" });
+    this.setProject(bundle.project, { bundle });
   }
 
   exportProject() {

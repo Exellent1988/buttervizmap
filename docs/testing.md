@@ -43,14 +43,16 @@ pnpm test:visual
 
 - default project structure
 - import/export roundtrips
-- scene recall behavior
+- scene recall behavior, including output render settings
 - preset duplication behavior
+- migration diagnostics and missing-section backfill
 
 `geometry-composition.test.js`
 
 - geometry normalization
 - polygon hit testing
 - distance-to-edge calculations
+- quad UV interpolation
 - render-plan generation
 - interaction field summarization
 
@@ -61,6 +63,14 @@ pnpm test:visual
 - audio frame encoding/decoding
 - admin-to-viewer sync over the local WebSocket server
 - HTTP preset-catalog serving from `/api/presets`
+- preset-catalog summary metadata for debug visibility
+
+`browser-sync.test.js`
+
+- admin and output route smoke test against the real studio server
+- preset switching on a real browser page
+- output canvas rendering without local audio analyser crashes
+- guard against the converted-string preset warning regression
 
 When the environment forbids binding local ports, the protocol test falls back to an `EPERM` guard instead of hanging indefinitely. On a normal local machine or in CI, the full socket and HTTP integration coverage still runs.
 

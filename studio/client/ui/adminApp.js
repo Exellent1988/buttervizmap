@@ -2,9 +2,17 @@ import {
   mergePresetLibraryCatalog,
   normalizeSceneElement,
 } from "../../shared/project.js";
-import { pointInPolygon } from "../../shared/geometry.js";
+import { buildInteractionSummary } from "../../shared/composition.js";
+import {
+  getMaxDistanceFromCentroid,
+  getPolygonBounds,
+  getPolygonCentroid,
+  pointInPolygon,
+} from "../../shared/geometry.js";
 import { DemoAudioSource, MicrophoneAudioSource } from "../audio/frameSource.js";
 import { StudioCompositor } from "../rendering/compositor.js";
+
+const UI_STATE_KEY = "buttervizmap.ui.v1";
 
 function formatRoles(element) {
   return Object.entries(element.roles)
@@ -37,6 +45,14 @@ function formatDateTime(value) {
   }
 }
 
+function formatList(values = []) {
+  if (!values.length) {
+    return "none";
+  }
+
+  return values.join(", ");
+}
+
 export class AdminApp {
   constructor({ root, store, sessionSocket, sessionId, lanAddress }) {
     this.root = root;
@@ -58,9 +74,16 @@ export class AdminApp {
     this.nextRenderAt = 0;
     this.nextAutoPresetAt = 0;
     this.availablePresetCatalog = [];
+    this.availablePresetSummary = null;
+    this.catalogLoadError = null;
+    this.debugOverlayMode = "off";
+    this.favoritePresetIds = [];
+    this.recentPresetIds = [];
+    this.hoverElementId = null;
   }
 
   mount() {
+    this.loadUIPreferences();
     this.root.innerHTML = `
       <aside class="panel">
         <div class="hero-card">
@@ -157,10 +180,82 @@ export class AdminApp {
 
       const payload = await response.json();
       this.availablePresetCatalog = Array.isArray(payload.presets) ? payload.presets : [];
+      this.availablePresetSummary = payload.summary ?? null;
+      this.catalogLoadError = null;
       this.applyPresetCatalog();
     } catch (error) {
+      this.catalogLoadError = error instanceof Error ? error.message : String(error);
       console.warn("Failed to load preset catalog", error);
     }
+  }
+
+  loadUIPreferences() {
+    try {
+      const rawPreferences = localStorage.getItem(UI_STATE_KEY);
+      if (!rawPreferences) {
+        return;
+      }
+
+      const preferences = JSON.parse(rawPreferences);
+      this.presetSearchQuery =
+        typeof preferences.presetSearchQuery === "string"
+          ? preferences.presetSearchQuery
+          : this.presetSearchQuery;
+      this.presetFilter =
+        typeof preferences.presetFilter === "string"
+          ? preferences.presetFilter
+          : this.presetFilter;
+      this.debugOverlayMode =
+        typeof preferences.debugOverlayMode === "string"
+          ? preferences.debugOverlayMode
+          : preferences.showDebugOverlays
+            ? "interaction"
+            : "off";
+      this.favoritePresetIds = Array.isArray(preferences.favoritePresetIds)
+        ? preferences.favoritePresetIds
+        : [];
+      this.recentPresetIds = Array.isArray(preferences.recentPresetIds)
+        ? preferences.recentPresetIds.slice(0, 8)
+        : [];
+    } catch (error) {
+      console.warn("Failed to load ButterVizMap UI preferences", error);
+    }
+  }
+
+  saveUIPreferences() {
+    try {
+      localStorage.setItem(
+        UI_STATE_KEY,
+        JSON.stringify({
+          presetSearchQuery: this.presetSearchQuery,
+          presetFilter: this.presetFilter,
+          debugOverlayMode: this.debugOverlayMode,
+          favoritePresetIds: this.favoritePresetIds,
+          recentPresetIds: this.recentPresetIds,
+        })
+      );
+    } catch (error) {
+      console.warn("Failed to save ButterVizMap UI preferences", error);
+    }
+  }
+
+  isFavoritePreset(presetId) {
+    return this.favoritePresetIds.includes(presetId);
+  }
+
+  toggleFavoritePreset(presetId) {
+    if (this.isFavoritePreset(presetId)) {
+      this.favoritePresetIds = this.favoritePresetIds.filter((entry) => entry !== presetId);
+    } else {
+      this.favoritePresetIds = [...this.favoritePresetIds, presetId];
+    }
+    this.saveUIPreferences();
+    this.render(this.store.state);
+  }
+
+  pushRecentPreset(presetId) {
+    this.recentPresetIds = [presetId, ...this.recentPresetIds.filter((entry) => entry !== presetId)].slice(0, 8);
+    this.saveUIPreferences();
   }
 
   applyPresetCatalog() {
@@ -355,11 +450,14 @@ export class AdminApp {
     });
 
     this.overlayCanvas.addEventListener("pointermove", (event) => {
+      const hoverPoint = this.getCanvasPoint(event);
+      this.hoverElementId = this.findTopmostElementAtPoint(hoverPoint)?.id ?? null;
       if (!this.pointerState) {
+        this.renderOverlay(this.store.state);
         return;
       }
 
-      const point = this.getCanvasPoint(event);
+      const point = hoverPoint;
       const element = this.store.state.project.elements.find(
         (entry) => entry.id === this.pointerState.elementId
       );
@@ -402,13 +500,21 @@ export class AdminApp {
 
     this.overlayCanvas.addEventListener("pointerup", clearPointerState);
     this.overlayCanvas.addEventListener("pointercancel", clearPointerState);
+    this.overlayCanvas.addEventListener("pointerleave", () => {
+      this.hoverElementId = null;
+      this.renderOverlay(this.store.state);
+    });
   }
 
   bindKeyboardEvents() {
     window.addEventListener("keydown", (event) => {
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+        return;
+      }
+
       if (
-        this.selectedPointIndex == null ||
-        !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)
+        event.target instanceof HTMLElement &&
+        ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName)
       ) {
         return;
       }
@@ -420,6 +526,20 @@ export class AdminApp {
 
       event.preventDefault();
       const step = event.shiftKey ? 0.02 : 0.005;
+      if (this.selectedPointIndex == null) {
+        const movedPoints = selectedElement.geometry.points.map((point) => ({
+          x: Math.max(0, Math.min(1, point.x + (event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0))),
+          y: Math.max(0, Math.min(1, point.y + (event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0))),
+        }));
+        this.updateSelectedElement({
+          ...selectedElement,
+          geometry: {
+            ...selectedElement.geometry,
+            points: movedPoints,
+          },
+        });
+        return;
+      }
       const delta =
         event.key === "ArrowUp"
           ? { x: 0, y: -step }
@@ -463,6 +583,7 @@ export class AdminApp {
     this.overlayContext.clearRect(0, 0, width, height);
     state.project.elements.forEach((element) => {
       const selected = element.id === state.selectedElementId;
+      const hovered = element.id === this.hoverElementId;
       this.overlayContext.beginPath();
       element.geometry.points.forEach((point, index) => {
         const x = point.x * width;
@@ -478,10 +599,17 @@ export class AdminApp {
       if (selected) {
         this.overlayContext.fillStyle = "rgba(255, 142, 80, 0.12)";
         this.overlayContext.fill();
+      } else if (hovered) {
+        this.overlayContext.fillStyle = "rgba(95, 208, 200, 0.08)";
+        this.overlayContext.fill();
       }
 
-      this.overlayContext.strokeStyle = selected ? "#ff8e50" : "rgba(95, 208, 200, 0.7)";
-      this.overlayContext.lineWidth = selected ? 3 : 2;
+      this.overlayContext.strokeStyle = selected
+        ? "#ff8e50"
+        : hovered
+          ? "rgba(255, 225, 123, 0.92)"
+          : "rgba(95, 208, 200, 0.7)";
+      this.overlayContext.lineWidth = selected ? 3.5 : hovered ? 2.5 : 2;
       this.overlayContext.stroke();
 
       element.geometry.points.forEach((point, index) => {
@@ -509,6 +637,67 @@ export class AdminApp {
         this.overlayContext.fillText(`${index + 1}`, x + 8, y - 8);
       });
     });
+
+    if (["interaction", "all"].includes(this.debugOverlayMode)) {
+      buildInteractionSummary(state.project).forEach((field) => {
+        const centroid = getPolygonCentroid(field.geometry.points);
+        const radius = getMaxDistanceFromCentroid(field.geometry.points) * Math.min(width, height);
+
+        this.overlayContext.save();
+        this.overlayContext.strokeStyle = "rgba(255, 225, 123, 0.85)";
+        this.overlayContext.setLineDash([6, 6]);
+        this.overlayContext.lineWidth = 1.5;
+        this.overlayContext.beginPath();
+        this.overlayContext.arc(centroid.x * width, centroid.y * height, Math.max(12, radius), 0, Math.PI * 2);
+        this.overlayContext.stroke();
+        this.overlayContext.setLineDash([]);
+        this.overlayContext.fillStyle = "rgba(255, 225, 123, 0.9)";
+        this.overlayContext.beginPath();
+        this.overlayContext.arc(centroid.x * width, centroid.y * height, 4, 0, Math.PI * 2);
+        this.overlayContext.fill();
+        this.overlayContext.fillStyle = "#ffe17b";
+        this.overlayContext.font = "11px IBM Plex Mono";
+        this.overlayContext.fillText(
+          `a ${field.alpha.toFixed(2)} · d ${field.distance.toFixed(2)} · i ${field.influence.toFixed(2)}`,
+          centroid.x * width + 10,
+          centroid.y * height + 16
+        );
+        this.overlayContext.restore();
+      });
+    }
+
+    if (!["surface", "all"].includes(this.debugOverlayMode)) {
+      return;
+    }
+
+    state.project.elements
+      .filter((element) => element.roles.shaderSurface)
+      .forEach((element) => {
+        const bounds = getPolygonBounds(element.geometry.points);
+        const selected = element.id === state.selectedElementId;
+
+        this.overlayContext.save();
+        this.overlayContext.strokeStyle = selected
+          ? "rgba(255, 142, 80, 0.9)"
+          : "rgba(95, 208, 200, 0.75)";
+        this.overlayContext.setLineDash([10, 6]);
+        this.overlayContext.lineWidth = 1.5;
+        this.overlayContext.strokeRect(
+          bounds.minX * width,
+          bounds.minY * height,
+          Math.max(1, (bounds.maxX - bounds.minX) * width),
+          Math.max(1, (bounds.maxY - bounds.minY) * height)
+        );
+        this.overlayContext.setLineDash([]);
+        this.overlayContext.fillStyle = selected ? "#ff8e50" : "#5fd0c8";
+        this.overlayContext.font = "11px IBM Plex Mono";
+        this.overlayContext.fillText(
+          `${element.geometry.kind} local bounds`,
+          bounds.minX * width + 8,
+          bounds.minY * height + 14
+        );
+        this.overlayContext.restore();
+      });
   }
 
   bindUIEvents() {
@@ -593,6 +782,11 @@ export class AdminApp {
         return;
       }
 
+      if (target.dataset.favoritePreset) {
+        this.toggleFavoritePreset(target.dataset.favoritePreset);
+        return;
+      }
+
       if (target.dataset.focusPoint != null) {
         this.selectedPointIndex = Number(target.dataset.focusPoint);
         this.renderOverlay(this.store.state);
@@ -641,6 +835,7 @@ export class AdminApp {
 
     if (target.id === "preset-search") {
       this.presetSearchQuery = target.value;
+      this.saveUIPreferences();
       this.render(this.store.state);
       return;
     }
@@ -888,11 +1083,20 @@ export class AdminApp {
 
     if (target.id === "preset-filter") {
       this.presetFilter = target.value;
+      this.saveUIPreferences();
+      this.render(this.store.state);
+      return;
+    }
+
+    if (target.id === "debug-overlay-mode") {
+      this.debugOverlayMode = target.value;
+      this.saveUIPreferences();
       this.render(this.store.state);
       return;
     }
 
     if (target.id === "global-preset") {
+      this.pushRecentPreset(target.value);
       this.store.updateProject((project) => ({
         ...project,
         globalLayer: {
@@ -934,6 +1138,7 @@ export class AdminApp {
     }
 
     if (target.id === "element-preset") {
+      this.pushRecentPreset(target.value);
       this.updateSelectedElement({
         ...selectedElement,
         shaderBinding: {
@@ -1014,6 +1219,10 @@ export class AdminApp {
     );
 
     const filePresets = presets.filter((preset) => preset.sourceType === "file");
+    filePresets
+      .filter((preset) => preset.meta?.parityTarget)
+      .slice(0, 6)
+      .forEach((preset) => starterIds.add(preset.id));
     const keywordGroups = [
       "spiral",
       "wave",
@@ -1051,6 +1260,12 @@ export class AdminApp {
     return starterIds;
   }
 
+  getRecentPresetEntries(presets) {
+    return this.recentPresetIds
+      .map((presetId) => presets.find((preset) => preset.id === presetId))
+      .filter(Boolean);
+  }
+
   getVisiblePresetEntries(presets) {
     const starterIds = this.getStarterPresetIds(presets);
     const query = this.presetSearchQuery.trim().toLowerCase();
@@ -1069,6 +1284,12 @@ export class AdminApp {
         if (this.presetFilter === "repo" && preset.sourceType !== "file") {
           return false;
         }
+        if (this.presetFilter === "favorites" && !this.isFavoritePreset(preset.id)) {
+          return false;
+        }
+        if (this.presetFilter === "recent" && !this.recentPresetIds.includes(preset.id)) {
+          return false;
+        }
         if (!query) {
           return true;
         }
@@ -1077,7 +1298,12 @@ export class AdminApp {
           .toLowerCase()
           .includes(query);
       })
-      .sort((left, right) => left.name.localeCompare(right.name, "en"));
+      .sort((left, right) => {
+        if (this.isFavoritePreset(left.id) !== this.isFavoritePreset(right.id)) {
+          return this.isFavoritePreset(left.id) ? -1 : 1;
+        }
+        return left.name.localeCompare(right.name, "en");
+      });
   }
 
   renderPresetOptions(presets, selectedPresetId) {
@@ -1149,6 +1375,10 @@ export class AdminApp {
     const outputUrl = this.getOutputUrl();
     const lanHintUrl = this.getLanHintUrl();
     const debugState = this.compositor?.getDebugState?.() ?? {};
+    const socketDebugState = this.sessionSocket?.getDebugState?.() ?? {};
+    const projectDiagnostics = state.projectDiagnostics ?? {};
+    const catalogSummary =
+      this.availablePresetSummary ?? debugState.presetCatalogSummary ?? null;
     const sessionMarkup = `
       <div class="panel-header">
         <h3>Session</h3>
@@ -1273,6 +1503,15 @@ export class AdminApp {
           Server-detected LAN hint
           <input class="code" type="text" value="${escapeHtml(lanHintUrl)}" readonly />
         </label>
+        <label ${makeTitle("Shows live interaction fields, local mapping bounds, or both directly on the preview canvas.")}>
+          Debug overlays
+          <select id="debug-overlay-mode">
+            <option value="off" ${this.debugOverlayMode === "off" ? "selected" : ""}>Off</option>
+            <option value="interaction" ${this.debugOverlayMode === "interaction" ? "selected" : ""}>Interaction</option>
+            <option value="surface" ${this.debugOverlayMode === "surface" ? "selected" : ""}>Surface bounds</option>
+            <option value="all" ${this.debugOverlayMode === "all" ? "selected" : ""}>All overlays</option>
+          </select>
+        </label>
         <p class="muted">For other devices, open the same output path on your host machine's real LAN IP. The container-internal address is not always the public URL.</p>
         <div class="button-row">
           <button id="open-output">Open output window</button>
@@ -1356,10 +1595,25 @@ export class AdminApp {
               <option value="studio" ${this.presetFilter === "studio" ? "selected" : ""}>Studio built-ins</option>
               <option value="repo" ${this.presetFilter === "repo" ? "selected" : ""}>Repo presets</option>
               <option value="solid" ${this.presetFilter === "solid" ? "selected" : ""}>Solid only</option>
+              <option value="favorites" ${this.presetFilter === "favorites" ? "selected" : ""}>Favorites</option>
+              <option value="recent" ${this.presetFilter === "recent" ? "selected" : ""}>Recent</option>
             </select>
           </label>
         </div>
         <p class="muted">Starter combines the solid background mode, the studio defaults and a small cross-section of repo presets from different families/authors.</p>
+        ${
+          this.getRecentPresetEntries(state.project.presetLibrary.presets).length
+            ? `
+              <div class="chip-row" style="margin-top:10px">
+                ${this.getRecentPresetEntries(state.project.presetLibrary.presets)
+                  .map(
+                    (preset) => `<span class="chip">${escapeHtml(preset.name)}</span>`
+                  )
+                  .join("")}
+              </div>
+            `
+            : ""
+        }
       </div>
       <div class="list">
         ${visiblePresetEntries
@@ -1371,11 +1625,17 @@ export class AdminApp {
                   `${this.getPresetMeta(preset).author} · ${preset.sourceType}:${preset.sourcePresetId}`
                 )}</small>
                 ${
+                  this.getPresetMeta(preset).parityTarget
+                    ? `<div class="chip-row" style="margin-top:8px"><span class="chip">Parity target</span></div>`
+                    : ""
+                }
+                ${
                   this.getPresetMeta(preset).description
                     ? `<p class="muted" style="margin:8px 0 0">${escapeHtml(this.getPresetMeta(preset).description)}</p>`
                     : ""
                 }
                 <div class="button-row" style="margin-top:10px">
+                  <button class="${this.isFavoritePreset(preset.id) ? "" : "secondary"}" data-favorite-preset="${preset.id}" ${makeTitle("Pins this preset into your local favorites list for faster show-time access.")}>${this.isFavoritePreset(preset.id) ? "Favorited" : "Favorite"}</button>
                   <button class="secondary" data-duplicate-preset="${preset.id}" ${makeTitle("Duplicates this preset entry so you can keep a separate override target in the project.")}>Duplicate</button>
                 </div>
               </div>
@@ -1404,18 +1664,50 @@ export class AdminApp {
             <strong>Autosave</strong>
             <small>Last saved: ${escapeHtml(formatDateTime(state.lastSavedAt))}</small>
             <small>Storage key: <span class="code">buttervizmap.autosave.v1</span></small>
+            <small>Error: ${escapeHtml(state.autosaveError ?? "none")}</small>
           </div>
           <div class="debug-card">
             <strong>Global renderer</strong>
             <small>Mode: ${escapeHtml(debugState.globalRenderer?.runtimeMode ?? "pending")}</small>
-            <small>Preset: ${escapeHtml(debugState.globalRenderer?.currentPresetName ?? "none")}</small>
+            <small>Active preset: ${escapeHtml(debugState.globalRenderer?.activePresetName ?? "none")}</small>
+            <small>Requested preset: ${escapeHtml(debugState.globalRenderer?.requestedPresetName ?? "none")}</small>
+            <small>Fallback: ${escapeHtml(debugState.globalRenderer?.fallbackMode ?? "none")}</small>
             <small>Error: ${escapeHtml(debugState.globalRenderer?.lastError ?? "none")}</small>
+            <small>Bundle: ${escapeHtml(debugState.globalRenderer?.bundlePath ?? "mock-only")}</small>
           </div>
           <div class="debug-card">
             <strong>Render config</strong>
             <small>Frame limit: ${state.project.output.rendering.frameLimit}</small>
             <small>Canvas scale: ${state.project.output.rendering.canvasScale}x</small>
             <small>Mesh: ${state.project.output.rendering.meshWidth} × ${state.project.output.rendering.meshHeight}</small>
+          </div>
+          <div class="debug-card">
+            <strong>Project diagnostics</strong>
+            <small>Source: ${escapeHtml(projectDiagnostics.source ?? "runtime")}</small>
+            <small>Version: ${escapeHtml(String(projectDiagnostics.sourceVersion ?? state.project.version))} → ${escapeHtml(String(projectDiagnostics.normalizedVersion ?? state.project.version))}</small>
+            <small>Migrated: ${projectDiagnostics.migrated ? "yes" : "no"}</small>
+            <small>Missing: ${escapeHtml(formatList(projectDiagnostics.missingSections ?? []))}</small>
+          </div>
+          <div class="debug-card">
+            <strong>Preset catalog</strong>
+            <small>Total: ${escapeHtml(String(catalogSummary?.total ?? state.project.presetLibrary.presets.length))}</small>
+            <small>Solid/Built-in/File: ${escapeHtml(
+              `${catalogSummary?.solid ?? 0} / ${catalogSummary?.builtin ?? 0} / ${catalogSummary?.file ?? 0}`
+            )}</small>
+            <small>Pack counts: ${escapeHtml(
+              catalogSummary?.byPack ? Object.entries(catalogSummary.byPack).map(([pack, count]) => `${pack}:${count}`).join(", ") : "n/a"
+            )}</small>
+            <small>Load error: ${escapeHtml(this.catalogLoadError ?? "none")}</small>
+          </div>
+          <div class="debug-card">
+            <strong>Session socket</strong>
+            <small>Status: ${escapeHtml(socketDebugState.lastStatus ?? state.connectionStatus)}</small>
+            <small>Sent/Received: ${escapeHtml(
+              `${socketDebugState.sentMessages ?? 0} / ${socketDebugState.receivedMessages ?? 0}`
+            )}</small>
+            <small>Viewers: ${escapeHtml(String(state.viewerCount))}</small>
+            <small>Last sent: ${escapeHtml(formatDateTime(socketDebugState.lastSentAt))}</small>
+            <small>Last received: ${escapeHtml(formatDateTime(socketDebugState.lastReceivedAt))}</small>
           </div>
         </div>
         ${
@@ -1429,6 +1721,7 @@ export class AdminApp {
                         <strong>${escapeHtml(renderer.currentPresetName ?? renderer.elementId)}</strong>
                         <small>Element: ${escapeHtml(renderer.elementId)}</small>
                         <small>Mode: ${escapeHtml(renderer.runtimeMode ?? "pending")}</small>
+                        <small>Fallback: ${escapeHtml(renderer.fallbackMode ?? "none")}</small>
                         <small>Error: ${escapeHtml(renderer.lastError ?? "none")}</small>
                       </div>
                     `
@@ -1518,6 +1811,7 @@ export class AdminApp {
               <option value="pulse" ${selectedElement.shaderBinding.reactionMode === "pulse" ? "selected" : ""}>Pulse</option>
               <option value="warp" ${selectedElement.shaderBinding.reactionMode === "warp" ? "selected" : ""}>Warp</option>
               <option value="glow" ${selectedElement.shaderBinding.reactionMode === "glow" ? "selected" : ""}>Glow</option>
+              <option value="reflect" ${selectedElement.shaderBinding.reactionMode === "reflect" ? "selected" : ""}>Reflect</option>
             </select>
           </label>
         </div>

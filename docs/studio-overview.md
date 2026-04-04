@@ -43,7 +43,7 @@ The current implementation keeps the interaction contract standardized:
 - color
 - distance / falloff
 
-That keeps the editor and the network protocol stable even when the underlying Butterchurn integration evolves.
+That keeps the editor and the network protocol stable even when the underlying Butterchurn integration evolves. The compositor now also applies a boundary-reaction pass so interaction fields can act as additional contour cues rather than only final-frame tint layers.
 
 ## Presets
 
@@ -57,11 +57,14 @@ The runtime now supports three preset source types:
 - `builtin`: curated studio presets shipped with the app
 - `file`: JSON presets loaded from the repository preset catalog
 
+`file` presets are the path intended for ButterchurnViz parity. `solid` and `builtin` presets remain operator-friendly studio fallbacks and can run through the studio mock renderer without depending on converted Butterchurn equation bundles.
+
 The admin UI exposes a preset browser with:
 
 - a `Starter` scope for a smaller curated subset
 - an `All presets` scope for the full catalog
 - source-specific scopes for studio, repo, and solid presets
+- local `Favorites` and `Recent` scopes stored in browser UI state
 - search across preset names, file ids, and derived author labels
 
 The main preset source is now the converted catalog shipped by the `butterchurn-presets` package, which is the same family of presets exposed by `butterchurnviz.com`. The older repository JSON directory remains available as a fallback source.
@@ -87,7 +90,7 @@ Shader surfaces also expose mapping and reaction controls:
 - offset X / Y
 - rotation
 - interaction mix
-- reaction mode (`tint`, `pulse`, `warp`, `glow`)
+- reaction mode (`tint`, `pulse`, `warp`, `glow`, `reflect`)
 
 Interaction fields expose:
 
@@ -126,3 +129,23 @@ Project files are versioned JSON documents with:
 - `scenes`
 
 The browser stores an autosave copy locally, and the same structure can be exported and re-imported.
+
+Older project files are normalized during import/autosave restore. Missing sections such as `output.rendering`, `output.presets`, and `globalLayer` are backfilled automatically, and the admin debug panel reports when a project was migrated.
+
+Scenes now capture not only element and global-layer bindings, but also output-facing render controls such as frame limit, mesh size, and preset-cycle settings. That makes scene recall closer to a real operator recall state instead of only a visual layer preset swap.
+
+## Debugging and diagnostics
+
+The admin route exposes a debug section for live troubleshooting:
+
+- autosave status, last save time, and persistence errors
+- project migration diagnostics
+- renderer mode, active preset, last preset-load error, and loaded bundle path
+- preset catalog counts by source and pack
+- session socket traffic counters and timestamps
+- optional canvas debug overlays for interaction-field centroids and radius estimates
+- optional surface-bound overlays for local mapping bounds
+
+## Audio model
+
+The admin route is always the master audio source. If the operator switches to microphone input, the admin browser captures and analyzes that signal, and output viewers receive the resulting audio-analysis frames over the session socket. Viewers never need their own microphone input and should not diverge from the master signal.

@@ -1,9 +1,10 @@
 import { createBuiltinLibraryEntries } from "./defaultPresets.js";
 import { normalizeGeometry } from "./geometry.js";
 
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 const BLEND_MODES = new Set(["normal", "screen", "add", "multiply", "overlay"]);
-const REACTION_MODES = new Set(["tint", "pulse", "warp", "glow"]);
+const REACTION_MODES = new Set(["tint", "pulse", "warp", "glow", "reflect"]);
+const BUILTIN_LIBRARY_ENTRIES = createBuiltinLibraryEntries();
 
 function createId(prefix) {
   if (globalThis.crypto?.randomUUID) {
@@ -222,7 +223,11 @@ export function createDefaultProject() {
       scale: 1,
     },
     presetLibrary: {
-      presets: createBuiltinLibraryEntries(),
+      presets: BUILTIN_LIBRARY_ENTRIES.map((preset) => ({
+        ...preset,
+        overrides: { ...(preset.overrides ?? {}) },
+        meta: { ...(preset.meta ?? {}) },
+      })),
     },
     elements,
     scenes: [],
@@ -262,6 +267,11 @@ export function captureScene(project, name = "Scene") {
     name,
     state: {
       globalLayer: { ...project.globalLayer },
+      output: {
+        background: project.output.background,
+        rendering: { ...project.output.rendering },
+        presets: { ...project.output.presets },
+      },
       elements: project.elements.map((element) => ({
         id: element.id,
         enabled: element.enabled,
@@ -292,6 +302,18 @@ export function applySceneToProject(project, sceneId) {
       ...project.meta,
       updatedAt: new Date().toISOString(),
     },
+    output: {
+      ...project.output,
+      ...scene.state.output,
+      rendering: {
+        ...project.output.rendering,
+        ...scene.state.output?.rendering,
+      },
+      presets: {
+        ...project.output.presets,
+        ...scene.state.output?.presets,
+      },
+    },
     globalLayer: { ...project.globalLayer, ...scene.state.globalLayer },
     elements: project.elements.map((element) => ({
       ...element,
@@ -317,6 +339,109 @@ export function applySceneToProject(project, sceneId) {
 }
 
 export function normalizeProject(project = {}) {
+  return normalizeProjectWithDiagnostics(project).project;
+}
+
+function normalizePresetLibraryEntries(presets = []) {
+  const mergedPresets = [];
+  const byKey = new Map();
+
+  BUILTIN_LIBRARY_ENTRIES.forEach((preset) => {
+    const normalizedPreset = {
+      ...preset,
+      overrides: { ...(preset.overrides ?? {}) },
+      meta: { ...(preset.meta ?? {}) },
+    };
+    const key = `${normalizedPreset.sourceType}:${normalizedPreset.sourcePresetId}`;
+    byKey.set(key, normalizedPreset);
+    mergedPresets.push(normalizedPreset);
+  });
+
+  presets.forEach((preset, index) => {
+    const normalizedPreset = {
+      id: preset.id ?? createId(`preset-${index}`),
+      name: preset.name ?? `Preset ${index + 1}`,
+      sourceType: preset.sourceType ?? "builtin",
+      sourcePresetId: preset.sourcePresetId ?? "aurora-grid",
+      overrides:
+        preset.overrides && typeof preset.overrides === "object"
+          ? { ...preset.overrides }
+          : {},
+      meta:
+        preset.meta && typeof preset.meta === "object"
+          ? { ...preset.meta }
+          : {},
+    };
+
+    const key = `${normalizedPreset.sourceType}:${normalizedPreset.sourcePresetId}`;
+    const existingPreset = byKey.get(key);
+    if (existingPreset) {
+      if (existingPreset.id && normalizedPreset.id && existingPreset.id !== normalizedPreset.id) {
+        mergedPresets.push(normalizedPreset);
+        return;
+      }
+
+      existingPreset.id = existingPreset.id ?? normalizedPreset.id;
+      existingPreset.name = normalizedPreset.name ?? existingPreset.name;
+      existingPreset.overrides = {
+        ...existingPreset.overrides,
+        ...normalizedPreset.overrides,
+      };
+      existingPreset.meta = {
+        ...normalizedPreset.meta,
+        ...existingPreset.meta,
+      };
+      return;
+    }
+
+    byKey.set(key, normalizedPreset);
+    mergedPresets.push(normalizedPreset);
+  });
+
+  return mergedPresets;
+}
+
+function collectMissingSections(project) {
+  const missingSections = [];
+
+  if (!project.output || typeof project.output !== "object") {
+    missingSections.push("output");
+  }
+  if (!project.output?.rendering || typeof project.output.rendering !== "object") {
+    missingSections.push("output.rendering");
+  }
+  if (!project.output?.presets || typeof project.output.presets !== "object") {
+    missingSections.push("output.presets");
+  }
+  if (!project.globalLayer || typeof project.globalLayer !== "object") {
+    missingSections.push("globalLayer");
+  }
+  if (!project.presetLibrary || !Array.isArray(project.presetLibrary.presets)) {
+    missingSections.push("presetLibrary.presets");
+  }
+
+  return missingSections;
+}
+
+function createProjectDiagnostics({
+  source = "runtime",
+  sourceVersion = STORAGE_VERSION,
+  missingSections = [],
+}) {
+  return {
+    source,
+    sourceVersion,
+    normalizedVersion: STORAGE_VERSION,
+    migrated: sourceVersion !== STORAGE_VERSION || missingSections.length > 0,
+    missingSections,
+    builtinPresetCount: BUILTIN_LIBRARY_ENTRIES.length,
+    normalizedAt: new Date().toISOString(),
+  };
+}
+
+export function normalizeProjectWithDiagnostics(project = {}, options = {}) {
+  const sourceVersion = Number(project.version ?? 0) || 0;
+  const missingSections = collectMissingSections(project);
   const normalized = {
     version: STORAGE_VERSION,
     meta: {
@@ -363,19 +488,7 @@ export function normalizeProject(project = {}) {
       scale: clampNumber(project.globalLayer?.scale, 1, 0.8, 1.5),
     },
     presetLibrary: {
-      presets: Array.isArray(project.presetLibrary?.presets)
-        ? project.presetLibrary.presets.map((preset, index) => ({
-            id: preset.id ?? createId(`preset-${index}`),
-            name: preset.name ?? `Preset ${index + 1}`,
-            sourceType: preset.sourceType ?? "builtin",
-            sourcePresetId: preset.sourcePresetId ?? "aurora-grid",
-            overrides: preset.overrides ?? {},
-            meta:
-              preset.meta && typeof preset.meta === "object"
-                ? { ...preset.meta }
-                : {},
-          }))
-        : createBuiltinLibraryEntries(),
+      presets: normalizePresetLibraryEntries(project.presetLibrary?.presets),
     },
     elements: Array.isArray(project.elements)
       ? project.elements.map(normalizeSceneElement)
@@ -386,6 +499,11 @@ export function normalizeProject(project = {}) {
           name: scene.name ?? "Scene",
           state: {
             globalLayer: { ...scene.state?.globalLayer },
+            output: {
+              background: scene.state?.output?.background,
+              rendering: { ...scene.state?.output?.rendering },
+              presets: { ...scene.state?.output?.presets },
+            },
             elements: Array.isArray(scene.state?.elements)
               ? scene.state.elements.map((element) => ({
                   id: element.id,
@@ -403,7 +521,14 @@ export function normalizeProject(project = {}) {
       : [],
   };
 
-  return normalized;
+  return {
+    project: normalized,
+    diagnostics: createProjectDiagnostics({
+      source: options.source,
+      sourceVersion,
+      missingSections,
+    }),
+  };
 }
 
 export function mergePresetLibraryCatalog(project, catalogPresets = []) {
@@ -489,5 +614,13 @@ export function serializeProject(project) {
 }
 
 export function parseProject(serializedProject) {
-  return normalizeProject(JSON.parse(serializedProject));
+  return parseProjectBundle(serializedProject).project;
+}
+
+export function parseProjectBundle(serializedProject, options = {}) {
+  const rawProject =
+    typeof serializedProject === "string"
+      ? JSON.parse(serializedProject)
+      : serializedProject;
+  return normalizeProjectWithDiagnostics(rawProject, options);
 }

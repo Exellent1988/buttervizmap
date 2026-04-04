@@ -37,12 +37,19 @@ async function boot() {
   const sessionSocket = new SessionSocket({
     role: role === "admin" ? "admin" : "viewer",
     sessionId,
+    getHelloPayload:
+      role === "admin"
+        ? () => ({
+            project: store.state.project,
+          })
+        : undefined,
     onStatusChange: (status) => store.setConnectionStatus(status),
     onMessage: (message) => {
       if (message.type === "PROJECT_SNAPSHOT") {
         store.setProject(message.payload.project, {
           preserveSelection: true,
           skipAutosave: role !== "admin",
+          source: "session",
         });
       }
 
@@ -54,6 +61,7 @@ async function boot() {
         store.setProject(applySceneToProject(store.state.project, message.payload.sceneId), {
           preserveSelection: true,
           skipAutosave: role !== "admin",
+          source: "scene-recall",
         });
       }
 

@@ -1,7 +1,12 @@
 import { describe, expect, test } from "@jest/globals";
-import { buildInteractionSummary, buildRenderPlan } from "../../studio/shared/composition.js";
+import {
+  buildBoundarySummary,
+  buildInteractionSummary,
+  buildRenderPlan,
+} from "../../studio/shared/composition.js";
 import {
   distanceToPolygonEdge,
+  interpolateQuadPoint,
   normalizeGeometry,
   pointInPolygon,
 } from "../../studio/shared/geometry.js";
@@ -34,6 +39,22 @@ describe("studio geometry and composition", () => {
     expect(distanceToPolygonEdge({ x: 0.5, y: 0.3 }, polygon)).toBeGreaterThan(0);
   });
 
+  test("interpolates points across quad UV space", () => {
+    const point = interpolateQuadPoint(
+      [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 1, y: 1 },
+        { x: 0, y: 1 },
+      ],
+      0.25,
+      0.75
+    );
+
+    expect(point.x).toBeCloseTo(0.25);
+    expect(point.y).toBeCloseTo(0.75);
+  });
+
   test("builds a stable render plan for global, local, paint and clip roles", () => {
     const project = createDefaultProject();
     const operations = buildRenderPlan(project);
@@ -53,5 +74,12 @@ describe("studio geometry and composition", () => {
     expect(summary.every((entry) => typeof entry.alpha === "number")).toBe(true);
     expect(summary.some((entry) => entry.color === "#ff7d45")).toBe(true);
   });
-});
 
+  test("includes clip elements in the boundary summary", () => {
+    const project = createDefaultProject();
+    const summary = buildBoundarySummary(project);
+
+    expect(summary.some((entry) => entry.sourceRole === "clip")).toBe(true);
+    expect(summary.some((entry) => entry.sourceRole === "interactionField")).toBe(true);
+  });
+});
