@@ -25,6 +25,12 @@ export default class CompShader {
     this.indexBuf = gl.createBuffer();
     this.positionVertexBuf = this.gl.createBuffer();
     this.compColorVertexBuf = this.gl.createBuffer();
+    this.studioInteractionState = {
+      enabled: false,
+      interactionMix: 0,
+      reactionModeId: 0,
+      binding: null,
+    };
 
     this.floatPrecision = ShaderUtils.getFragmentFloatPrecision(this.gl);
     this.createShader();
@@ -246,6 +252,8 @@ export default class CompShader {
       uniform sampler2D sampler_pw_noise_lq;
       uniform sampler3D sampler_noisevol_lq;
       uniform sampler3D sampler_noisevol_hq;
+      uniform sampler2D sampler_studio_interaction_fill;
+      uniform sampler2D sampler_studio_interaction_contour;
 
       uniform float time;
       uniform float gammaAdj;
@@ -343,10 +351,58 @@ export default class CompShader {
       uniform vec4 rand_preset;
 
       uniform float fShader;
+      uniform float studio_interaction_mix;
+      uniform int studio_reaction_mode;
+      uniform vec4 studio_binding;
 
       float PI = ${Math.PI};
 
       ${fragShaderHeaderText}
+
+      vec2 studioNeutralUv(vec2 uv) {
+        float scale = max(studio_binding.x, 0.0001);
+        vec2 drift = studio_binding.yz * 0.5;
+        float rotation = studio_binding.w;
+        float cosRot = cos(rotation);
+        float sinRot = sin(rotation);
+        vec2 centered = uv - vec2(0.5) - drift;
+        vec2 rotated = vec2(
+          centered.x * cosRot + centered.y * sinRot,
+          -centered.x * sinRot + centered.y * cosRot
+        );
+        return vec2(0.5) + (rotated / scale);
+      }
+
+      vec3 applyStudioInteraction(vec3 color, vec2 uv) {
+        if (studio_interaction_mix <= 0.001) {
+          return color;
+        }
+
+        vec2 neutralUv = studioNeutralUv(uv);
+        vec4 fill = texture(sampler_studio_interaction_fill, neutralUv);
+        vec4 contour = texture(sampler_studio_interaction_contour, neutralUv);
+        vec3 nextColor = color;
+
+        if (studio_reaction_mode == 3) {
+          nextColor = mix(nextColor, max(nextColor, contour.rgb), contour.a * (0.25 + studio_interaction_mix * 0.55));
+          nextColor += contour.rgb * contour.a * studio_interaction_mix * 0.4;
+          nextColor = mix(nextColor, max(nextColor, fill.rgb), fill.a * (0.06 + studio_interaction_mix * 0.14));
+        } else if (studio_reaction_mode == 2) {
+          nextColor = mix(nextColor, fill.rgb, fill.a * (0.08 + studio_interaction_mix * 0.18));
+          nextColor = mix(nextColor, contour.rgb, contour.a * (0.1 + studio_interaction_mix * 0.22));
+        } else if (studio_reaction_mode == 1) {
+          nextColor += fill.rgb * fill.a * studio_interaction_mix * 0.22;
+          nextColor = mix(nextColor, contour.rgb, contour.a * (0.08 + studio_interaction_mix * 0.18));
+        } else if (studio_reaction_mode == 4) {
+          nextColor = mix(nextColor, fill.rgb, fill.a * (0.06 + studio_interaction_mix * 0.14));
+          nextColor += contour.rgb * contour.a * studio_interaction_mix * 0.24;
+        } else {
+          nextColor = mix(nextColor, fill.rgb, fill.a * (0.1 + studio_interaction_mix * 0.18));
+          nextColor = mix(nextColor, contour.rgb, contour.a * (0.12 + studio_interaction_mix * 0.24));
+        }
+
+        return clamp(nextColor, 0.0, 1.0);
+      }
 
       void main(void) {
         vec3 ret;
@@ -359,6 +415,7 @@ export default class CompShader {
         vec3 hue_shader = vColor.rgb;
 
         ${fragShaderText}
+        ret = applyStudioInteraction(ret, uv_orig);
 
         fragColor = vec4(ret, vColor.a);
       }
@@ -437,6 +494,14 @@ export default class CompShader {
     this.noiseVolHQLoc = this.gl.getUniformLocation(
       this.shaderProgram,
       "sampler_noisevol_hq"
+    );
+    this.studioFillTextureLoc = this.gl.getUniformLocation(
+      this.shaderProgram,
+      "sampler_studio_interaction_fill"
+    );
+    this.studioContourTextureLoc = this.gl.getUniformLocation(
+      this.shaderProgram,
+      "sampler_studio_interaction_contour"
     );
     this.timeLoc = this.gl.getUniformLocation(this.shaderProgram, "time");
     this.gammaAdjLoc = this.gl.getUniformLocation(
@@ -550,6 +615,18 @@ export default class CompShader {
       "rand_frame"
     );
     this.fShaderLoc = this.gl.getUniformLocation(this.shaderProgram, "fShader");
+    this.studioInteractionMixLoc = this.gl.getUniformLocation(
+      this.shaderProgram,
+      "studio_interaction_mix"
+    );
+    this.studioReactionModeLoc = this.gl.getUniformLocation(
+      this.shaderProgram,
+      "studio_reaction_mode"
+    );
+    this.studioBindingLoc = this.gl.getUniformLocation(
+      this.shaderProgram,
+      "studio_binding"
+    );
 
     this.qaLoc = this.gl.getUniformLocation(this.shaderProgram, "_qa");
     this.qbLoc = this.gl.getUniformLocation(this.shaderProgram, "_qb");
@@ -588,6 +665,13 @@ export default class CompShader {
 
   updateShader(shaderText) {
     this.createShader(shaderText);
+  }
+
+  setStudioInteractionState(state = {}) {
+    this.studioInteractionState = {
+      ...this.studioInteractionState,
+      ...state,
+    };
   }
 
   bindBlurVals(blurMins, blurMaxs) {
@@ -854,15 +938,44 @@ export default class CompShader {
     this.gl.bindTexture(this.gl.TEXTURE_3D, this.noise.noiseTexVolHQ);
     this.gl.uniform1i(this.noiseVolHQLoc, 14);
 
+    this.gl.activeTexture(this.gl.TEXTURE15);
+    this.gl.bindTexture(
+      this.gl.TEXTURE_2D,
+      this.image.getTexture("studio_interaction_fill")
+    );
+    this.gl.uniform1i(this.studioFillTextureLoc, 15);
+
+    this.gl.activeTexture(this.gl.TEXTURE16);
+    this.gl.bindTexture(
+      this.gl.TEXTURE_2D,
+      this.image.getTexture("studio_interaction_contour")
+    );
+    this.gl.uniform1i(this.studioContourTextureLoc, 16);
+
     for (let i = 0; i < this.userTextures.length; i++) {
       const userTexture = this.userTextures[i];
-      this.gl.activeTexture(this.gl.TEXTURE15 + i);
+      this.gl.activeTexture(this.gl.TEXTURE17 + i);
       this.gl.bindTexture(
         this.gl.TEXTURE_2D,
         this.image.getTexture(userTexture.sampler)
       );
-      this.gl.uniform1i(userTexture.textureLoc, 15 + i);
+      this.gl.uniform1i(userTexture.textureLoc, 17 + i);
     }
+
+    this.gl.uniform1f(
+      this.studioInteractionMixLoc,
+      this.studioInteractionState.enabled ? this.studioInteractionState.interactionMix : 0
+    );
+    this.gl.uniform1i(
+      this.studioReactionModeLoc,
+      this.studioInteractionState.reactionModeId ?? 0
+    );
+    this.gl.uniform4fv(this.studioBindingLoc, [
+      Math.max(0.0001, this.studioInteractionState.binding?.scale ?? 1),
+      this.studioInteractionState.binding?.offsetX ?? 0,
+      this.studioInteractionState.binding?.offsetY ?? 0,
+      (((this.studioInteractionState.binding?.rotation ?? 0) * Math.PI) / 180),
+    ]);
 
     this.gl.uniform1f(this.timeLoc, mdVSFrame.time);
     this.gl.uniform1f(this.gammaAdjLoc, mdVSFrame.gammaadj);

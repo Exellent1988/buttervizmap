@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Studio Compositor Test</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #000;
+      }
+      #preview {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="preview" width="320" height="180"></canvas>
+    <script type="module">
+      import { StudioCompositor } from "/studio/client/rendering/compositor.js";
+
+      const canvas = document.getElementById("preview");
+      const compositor = new StudioCompositor(canvas);
+
+      function samplePixel(context, x, y) {
+        const pixel = context.getImageData(x, y, 1, 1).data;
+        return { r: pixel[0], g: pixel[1], b: pixel[2], a: pixel[3] };
+      }
+
+      globalThis.__runStudioCompositorScenario = async (project) => {
+        await compositor.setProject(project);
+        compositor.setAudioFrame(null);
+        await compositor.render(0);
+        const context = canvas.getContext("2d");
+        const samples = {
+          baseInside: samplePixel(context, 48, 52),
+          innerClip: samplePixel(context, 168, 84),
+          edgeClip: samplePixel(context, 210, 132),
+          outsideSurface: samplePixel(context, 8, 8),
+        };
+
+        return {
+          samples,
+          debugState: compositor.getDebugState(),
+        };
+      };
+    </script>
+  </body>
+</html>

@@ -61,6 +61,43 @@ export function normalizePointsToBounds(points, bounds = getPolygonBounds(points
   }));
 }
 
+function mapUnitIntervalToSquareBoundary(value) {
+  const t = ((value % 1) + 1) % 1;
+  if (t < 0.25) {
+    return { x: t / 0.25, y: 0 };
+  }
+  if (t < 0.5) {
+    return { x: 1, y: (t - 0.25) / 0.25 };
+  }
+  if (t < 0.75) {
+    return { x: 1 - (t - 0.5) / 0.25, y: 1 };
+  }
+  return { x: 0, y: 1 - (t - 0.75) / 0.25 };
+}
+
+export function mapPolygonPointsToUnitSquareBoundary(points) {
+  if (!Array.isArray(points) || points.length < 3) {
+    return [];
+  }
+
+  let perimeter = 0;
+  const cumulative = [0];
+  for (let index = 0; index < points.length; index += 1) {
+    const nextIndex = (index + 1) % points.length;
+    perimeter += Math.hypot(
+      points[nextIndex].x - points[index].x,
+      points[nextIndex].y - points[index].y
+    );
+    cumulative.push(perimeter);
+  }
+
+  if (perimeter <= Number.EPSILON) {
+    return normalizePointsToBounds(points);
+  }
+
+  return points.map((_, index) => mapUnitIntervalToSquareBoundary(cumulative[index] / perimeter));
+}
+
 export function getPolygonCentroid(points) {
   const total = points.reduce(
     (accumulator, point) => ({
@@ -125,6 +162,238 @@ function segmentsIntersect(a1, a2, b1, b2) {
   }
 
   return (o1 > 0) !== (o2 > 0) && (o3 > 0) !== (o4 > 0);
+}
+
+function segmentIntersectionDetail(a1, a2, b1, b2) {
+  const denominator =
+    (a2.x - a1.x) * (b2.y - b1.y) - (a2.y - a1.y) * (b2.x - b1.x);
+
+  if (Math.abs(denominator) < 1e-9) {
+    return null;
+  }
+
+  const numeratorA =
+    (b1.x - a1.x) * (b2.y - b1.y) - (b1.y - a1.y) * (b2.x - b1.x);
+  const numeratorB =
+    (b1.x - a1.x) * (a2.y - a1.y) - (b1.y - a1.y) * (a2.x - a1.x);
+  const t = numeratorA / denominator;
+  const u = numeratorB / denominator;
+
+  if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) {
+    return null;
+  }
+
+  return {
+    point: {
+      x: a1.x + (a2.x - a1.x) * t,
+      y: a1.y + (a2.y - a1.y) * t,
+    },
+    t,
+    u,
+  };
+}
+
+function arePointsClose(left, right, epsilon = 1e-6) {
+  return Math.abs(left.x - right.x) <= epsilon && Math.abs(left.y - right.y) <= epsilon;
+}
+
+function makePointKey(point, precision = 1e6) {
+  return `${Math.round(point.x * precision)},${Math.round(point.y * precision)}`;
+}
+
+function dedupeSplitPoints(entries) {
+  const deduped = [];
+
+  entries
+    .sort((left, right) => left.t - right.t)
+    .forEach((entry) => {
+      const previous = deduped[deduped.length - 1];
+      if (previous && Math.abs(previous.t - entry.t) < 1e-6) {
+        previous.point = entry.point;
+        previous.t = entry.t;
+        return;
+      }
+      deduped.push(entry);
+    });
+
+  return deduped;
+}
+
+function buildBoundarySegments(points, otherPoints, includeSegment, reverse = false) {
+  const segments = [];
+
+  for (let index = 0; index < points.length; index += 1) {
+    const nextIndex = (index + 1) % points.length;
+    const edgeStart = points[index];
+    const edgeEnd = points[nextIndex];
+    const splitPoints = [
+      { t: 0, point: edgeStart },
+      { t: 1, point: edgeEnd },
+    ];
+
+    for (let otherIndex = 0; otherIndex < otherPoints.length; otherIndex += 1) {
+      const otherNextIndex = (otherIndex + 1) % otherPoints.length;
+      const intersection = segmentIntersectionDetail(
+        edgeStart,
+        edgeEnd,
+        otherPoints[otherIndex],
+        otherPoints[otherNextIndex]
+      );
+
+      if (!intersection) {
+        continue;
+      }
+
+      splitPoints.push({
+        t: Math.max(0, Math.min(1, intersection.t)),
+        point: intersection.point,
+      });
+    }
+
+    const ordered = dedupeSplitPoints(splitPoints);
+
+    for (let segmentIndex = 0; segmentIndex < ordered.length - 1; segmentIndex += 1) {
+      const first = ordered[segmentIndex].point;
+      const second = ordered[segmentIndex + 1].point;
+
+      if (arePointsClose(first, second)) {
+        continue;
+      }
+
+      const midpoint = {
+        x: (first.x + second.x) * 0.5,
+        y: (first.y + second.y) * 0.5,
+      };
+
+      if (!includeSegment(midpoint)) {
+        continue;
+      }
+
+      segments.push(
+        reverse
+          ? { start: second, end: first }
+          : { start: first, end: second }
+      );
+    }
+  }
+
+  return segments;
+}
+
+function cleanPolygonLoop(points) {
+  if (points.length < 3) {
+    return points;
+  }
+
+  const deduped = [];
+  points.forEach((point) => {
+    const previous = deduped[deduped.length - 1];
+    if (!previous || !arePointsClose(previous, point)) {
+      deduped.push(point);
+    }
+  });
+
+  if (deduped.length > 2 && arePointsClose(deduped[0], deduped[deduped.length - 1])) {
+    deduped.pop();
+  }
+
+  const cleaned = [];
+  for (let index = 0; index < deduped.length; index += 1) {
+    const previous = deduped[(index - 1 + deduped.length) % deduped.length];
+    const current = deduped[index];
+    const next = deduped[(index + 1) % deduped.length];
+    const cross =
+      (current.x - previous.x) * (next.y - current.y) -
+      (current.y - previous.y) * (next.x - current.x);
+
+    if (Math.abs(cross) > 1e-7 || cleaned.length < 2) {
+      cleaned.push(current);
+    }
+  }
+
+  return cleaned;
+}
+
+function stitchBoundaryLoops(segments) {
+  const loops = [];
+  const byStart = new Map();
+
+  segments.forEach((segment, index) => {
+    const key = makePointKey(segment.start);
+    if (!byStart.has(key)) {
+      byStart.set(key, []);
+    }
+    byStart.get(key).push(index);
+  });
+
+  const used = new Set();
+
+  for (let index = 0; index < segments.length; index += 1) {
+    if (used.has(index)) {
+      continue;
+    }
+
+    const loop = [segments[index].start];
+    let currentIndex = index;
+
+    while (!used.has(currentIndex)) {
+      used.add(currentIndex);
+      const currentSegment = segments[currentIndex];
+      loop.push(currentSegment.end);
+      const nextKey = makePointKey(currentSegment.end);
+      const candidates = byStart.get(nextKey) ?? [];
+      const nextIndex = candidates.find((candidate) => !used.has(candidate));
+
+      if (nextIndex == null) {
+        break;
+      }
+
+      currentIndex = nextIndex;
+      if (arePointsClose(segments[currentIndex].start, loop[0])) {
+        loop.push(segments[currentIndex].start);
+      }
+    }
+
+    const cleaned = cleanPolygonLoop(loop);
+    if (cleaned.length >= 3) {
+      loops.push(cleaned);
+    }
+  }
+
+  return loops;
+}
+
+export function subtractPolygonLoops(subjectPoints, clipPoints) {
+  const subjectArea = Math.abs(getSignedPolygonArea(subjectPoints));
+  if (!polygonsIntersect(subjectPoints, clipPoints)) {
+    if (subjectPoints.some((point) => pointInPolygon(point, clipPoints))) {
+      return [];
+    }
+    if (clipPoints.some((point) => pointInPolygon(point, subjectPoints))) {
+      return [subjectPoints];
+    }
+    return [subjectPoints];
+  }
+
+  const subjectAreaSign = Math.sign(getSignedPolygonArea(subjectPoints)) || 1;
+  const subjectSegments = buildBoundarySegments(
+    subjectPoints,
+    clipPoints,
+    (midpoint) => !pointInPolygon(midpoint, clipPoints)
+  );
+  const clipSegments = buildBoundarySegments(
+    clipPoints,
+    subjectPoints,
+    (midpoint) => pointInPolygon(midpoint, subjectPoints),
+    true
+  );
+  const loops = stitchBoundaryLoops([...subjectSegments, ...clipSegments]);
+
+  return loops.filter(
+    (loop) =>
+      (Math.sign(getSignedPolygonArea(loop)) || subjectAreaSign) === subjectAreaSign &&
+      Math.abs(getSignedPolygonArea(loop)) > subjectArea * 0.005
+  );
 }
 
 function pointInTriangle(point, a, b, c) {

@@ -28,7 +28,8 @@ export default class ImageTextures {
     /* eslint-enable max-len */
   }
 
-  bindTexture(texture, data, width, height) {
+  bindTexture(texture, data, width, height, opts = {}) {
+    const repeat = opts.repeat !== false;
     this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
 
     this.gl.pixelStorei(this.gl.UNPACK_ALIGNMENT, 1);
@@ -49,12 +50,12 @@ export default class ImageTextures {
     this.gl.texParameteri(
       this.gl.TEXTURE_2D,
       this.gl.TEXTURE_WRAP_S,
-      this.gl.REPEAT
+      repeat ? this.gl.REPEAT : this.gl.CLAMP_TO_EDGE
     );
     this.gl.texParameteri(
       this.gl.TEXTURE_2D,
       this.gl.TEXTURE_WRAP_T,
-      this.gl.REPEAT
+      repeat ? this.gl.REPEAT : this.gl.CLAMP_TO_EDGE
     );
     this.gl.texParameteri(
       this.gl.TEXTURE_2D,
@@ -80,14 +81,32 @@ export default class ImageTextures {
 
   loadExtraImages(imageData) {
     Object.keys(imageData).forEach((imageName) => {
-      const { data, width, height } = imageData[imageName];
+      const { data, width, height, repeat } = imageData[imageName];
+      const canBindDirectly =
+        typeof HTMLCanvasElement !== "undefined" && data instanceof HTMLCanvasElement;
+
+      if (canBindDirectly) {
+        if (!this.samplers[imageName]) {
+          this.samplers[imageName] = this.gl.createTexture();
+        }
+        this.bindTexture(this.samplers[imageName], data, width, height, { repeat });
+        return;
+      }
+
       if (!this.samplers[imageName]) {
         const image = new Image();
         image.onload = () => {
           this.samplers[imageName] = this.gl.createTexture();
-          this.bindTexture(this.samplers[imageName], image, width, height);
+          this.bindTexture(this.samplers[imageName], image, width, height, {
+            repeat,
+          });
         };
         image.src = data;
+      } else if (
+        (typeof ImageBitmap !== "undefined" && data instanceof ImageBitmap) ||
+        (typeof Image !== "undefined" && data instanceof Image)
+      ) {
+        this.bindTexture(this.samplers[imageName], data, width, height, { repeat });
       }
     });
   }

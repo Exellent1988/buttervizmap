@@ -4,6 +4,7 @@ import { normalizeGeometry } from "./geometry.js";
 const STORAGE_VERSION = 2;
 const BLEND_MODES = new Set(["normal", "screen", "add", "multiply", "overlay"]);
 const REACTION_MODES = new Set(["tint", "pulse", "warp", "glow", "reflect"]);
+const INTERACTION_ENGINES = new Set(["compositor", "renderer"]);
 const BUILTIN_LIBRARY_ENTRIES = createBuiltinLibraryEntries();
 
 function createId(prefix) {
@@ -204,6 +205,7 @@ export function createDefaultProject() {
         canvasScale: 2,
         meshWidth: 48,
         meshHeight: 36,
+        interactionEngine: "compositor",
       },
       presets: {
         cycleEnabled: false,
@@ -459,6 +461,11 @@ export function normalizeProjectWithDiagnostics(project = {}, options = {}) {
         canvasScale: clampNumber(project.output?.rendering?.canvasScale, 2, 0.5, 2),
         meshWidth: clampInteger(project.output?.rendering?.meshWidth, 48, 8, 128),
         meshHeight: clampInteger(project.output?.rendering?.meshHeight, 36, 6, 96),
+        interactionEngine: normalizeEnum(
+          project.output?.rendering?.interactionEngine,
+          INTERACTION_ENGINES,
+          "compositor"
+        ),
       },
       presets: {
         cycleEnabled: project.output?.presets?.cycleEnabled === true,

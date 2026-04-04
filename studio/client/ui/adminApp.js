@@ -588,6 +588,11 @@ export class AdminApp {
     }
 
     this.overlayContext.clearRect(0, 0, width, height);
+    const compositorDebugState = this.compositor?.getDebugState?.() ?? {};
+    const visibleSurfaceDebugEntries = compositorDebugState.visibleSurfaceGeometries ?? [];
+    const visibleSurfaceDebugByElement = new Map(
+      visibleSurfaceDebugEntries.map((entry) => [entry.elementId, entry])
+    );
     state.project.elements.forEach((element) => {
       const selected = element.id === state.selectedElementId;
       const hovered = element.id === this.hoverElementId;
@@ -682,11 +687,12 @@ export class AdminApp {
       .forEach((element) => {
         const bounds = getPolygonBounds(element.geometry.points);
         const selected = element.id === state.selectedElementId;
+        const visibleSurfaceDebug = visibleSurfaceDebugByElement.get(element.id);
 
         this.overlayContext.save();
         this.overlayContext.strokeStyle = selected
-          ? "rgba(255, 142, 80, 0.9)"
-          : "rgba(95, 208, 200, 0.75)";
+          ? "rgba(255, 142, 80, 0.45)"
+          : "rgba(95, 208, 200, 0.35)";
         this.overlayContext.setLineDash([10, 6]);
         this.overlayContext.lineWidth = 1.5;
         this.overlayContext.strokeRect(
@@ -704,6 +710,68 @@ export class AdminApp {
           bounds.minY * height + 14
         );
         this.overlayContext.restore();
+
+        visibleSurfaceDebug?.clipGeometries?.forEach((clipGeometry, clipIndex) => {
+          this.overlayContext.save();
+          this.overlayContext.beginPath();
+          clipGeometry.points.forEach((point, index) => {
+            const x = point.x * width;
+            const y = point.y * height;
+            if (index === 0) {
+              this.overlayContext.moveTo(x, y);
+            } else {
+              this.overlayContext.lineTo(x, y);
+            }
+          });
+          this.overlayContext.closePath();
+          this.overlayContext.fillStyle = "rgba(255, 80, 80, 0.08)";
+          this.overlayContext.fill();
+          this.overlayContext.strokeStyle = "rgba(255, 110, 110, 0.8)";
+          this.overlayContext.setLineDash([5, 4]);
+          this.overlayContext.lineWidth = 1.5;
+          this.overlayContext.stroke();
+          this.overlayContext.setLineDash([]);
+          this.overlayContext.fillStyle = "rgba(255, 140, 140, 0.95)";
+          this.overlayContext.font = "11px IBM Plex Mono";
+          this.overlayContext.fillText(
+            `clip ${clipIndex + 1}`,
+            clipGeometry.points[0].x * width + 8,
+            clipGeometry.points[0].y * height + 14
+          );
+          this.overlayContext.restore();
+        });
+
+        visibleSurfaceDebug?.visibleGeometries?.forEach((geometry, visibleIndex) => {
+          this.overlayContext.save();
+          this.overlayContext.beginPath();
+          geometry.points.forEach((point, index) => {
+            const x = point.x * width;
+            const y = point.y * height;
+            if (index === 0) {
+              this.overlayContext.moveTo(x, y);
+            } else {
+              this.overlayContext.lineTo(x, y);
+            }
+          });
+          this.overlayContext.closePath();
+          this.overlayContext.fillStyle = selected
+            ? "rgba(255, 142, 80, 0.12)"
+            : "rgba(95, 208, 200, 0.1)";
+          this.overlayContext.fill();
+          this.overlayContext.strokeStyle = selected
+            ? "rgba(255, 142, 80, 0.95)"
+            : "rgba(95, 208, 200, 0.95)";
+          this.overlayContext.lineWidth = 2.5;
+          this.overlayContext.stroke();
+          this.overlayContext.fillStyle = selected ? "#ffb084" : "#8ce8e1";
+          this.overlayContext.font = "11px IBM Plex Mono";
+          this.overlayContext.fillText(
+            `visible ${visibleIndex + 1}`,
+            geometry.points[0].x * width + 8,
+            geometry.points[0].y * height - 8
+          );
+          this.overlayContext.restore();
+        });
       });
   }
 
@@ -912,15 +980,20 @@ export class AdminApp {
     }
 
     if (
-      ["render-frame-limit", "render-canvas-scale", "render-mesh-width", "render-mesh-height"].includes(
-        target.id
-      )
+      [
+        "render-frame-limit",
+        "render-canvas-scale",
+        "render-mesh-width",
+        "render-mesh-height",
+        "render-interaction-engine",
+      ].includes(target.id)
     ) {
       const fieldMap = {
         "render-frame-limit": "frameLimit",
         "render-canvas-scale": "canvasScale",
         "render-mesh-width": "meshWidth",
         "render-mesh-height": "meshHeight",
+        "render-interaction-engine": "interactionEngine",
       };
       this.store.updateProject((project) => ({
         ...project,
@@ -928,7 +1001,8 @@ export class AdminApp {
           ...project.output,
           rendering: {
             ...project.output.rendering,
-            [fieldMap[target.id]]: Number(target.value),
+            [fieldMap[target.id]]:
+              target.id === "render-interaction-engine" ? target.value : Number(target.value),
           },
         },
       }));
@@ -1386,6 +1460,15 @@ export class AdminApp {
     const projectDiagnostics = state.projectDiagnostics ?? {};
     const catalogSummary =
       this.availablePresetSummary ?? debugState.presetCatalogSummary ?? null;
+    const visibleSurfaceSummary =
+      debugState.visibleSurfaceGeometries?.length
+        ? debugState.visibleSurfaceGeometries
+            .map(
+              (entry) =>
+                `${entry.elementName ?? entry.elementId}:${entry.visibleGeometries?.length ?? 0}`
+            )
+            .join(", ")
+        : "none";
     const sessionMarkup = `
       <div class="panel-header">
         <h3>Session</h3>
@@ -1493,6 +1576,13 @@ export class AdminApp {
           <label ${makeTitle("Vertical internal mesh density used by Butterchurn warp and comp passes.")}>
             Mesh height
             <input id="render-mesh-height" type="number" min="6" max="96" step="1" value="${state.project.output.rendering.meshHeight}" />
+          </label>
+          <label ${makeTitle("Switches between the studio compositor reaction prototype and a deeper renderer-side interaction prototype for comparison.")}>
+            Interaction engine
+            <select id="render-interaction-engine">
+              <option value="compositor" ${state.project.output.rendering.interactionEngine === "compositor" ? "selected" : ""}>Compositor prototype</option>
+              <option value="renderer" ${state.project.output.rendering.interactionEngine === "renderer" ? "selected" : ""}>Renderer prototype</option>
+            </select>
           </label>
         </div>
         <label ${makeTitle("Use the built-in demo generator or capture microphone input on the admin device.")}>
@@ -1690,6 +1780,8 @@ export class AdminApp {
             <small>Frame limit: ${state.project.output.rendering.frameLimit}</small>
             <small>Canvas scale: ${state.project.output.rendering.canvasScale}x</small>
             <small>Mesh: ${state.project.output.rendering.meshWidth} × ${state.project.output.rendering.meshHeight}</small>
+            <small>Interaction engine: ${escapeHtml(state.project.output.rendering.interactionEngine)}</small>
+            <small>Visible surfaces: ${escapeHtml(visibleSurfaceSummary)}</small>
           </div>
           <div class="debug-card">
             <strong>Project diagnostics</strong>

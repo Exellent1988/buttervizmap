@@ -145,6 +145,16 @@ export default class Renderer {
     this.gl.clearColor(0, 0, 0, 1);
 
     this.blankPreset = blankPreset;
+    this.studioInteractionState = {
+      enabled: false,
+      fillTexture: null,
+      contourTexture: null,
+      binding: null,
+      interactionMix: 0,
+      reactionModeId: 0,
+    };
+    this.compShader.setStudioInteractionState(this.studioInteractionState);
+    this.prevCompShader.setStudioInteractionState(this.studioInteractionState);
 
     const globalVars = {
       frame: 0,
@@ -278,6 +288,15 @@ export default class Renderer {
 
   loadExtraImages(imageData) {
     this.image.loadExtraImages(imageData);
+  }
+
+  setStudioInteractionState(state = {}) {
+    this.studioInteractionState = {
+      ...this.studioInteractionState,
+      ...state,
+    };
+    this.compShader.setStudioInteractionState(this.studioInteractionState);
+    this.prevCompShader.setStudioInteractionState(this.studioInteractionState);
   }
 
   setRendererSize(width, height, opts) {

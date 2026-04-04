@@ -5,12 +5,14 @@ import {
   buildRenderPlan,
 } from "../../studio/shared/composition.js";
 import {
-  distanceToPolygonEdge,
-  interpolateQuadPoint,
-  normalizeGeometry,
-  normalizePointsToBounds,
-  pointInPolygon,
+    distanceToPolygonEdge,
+    interpolateQuadPoint,
+    mapPolygonPointsToUnitSquareBoundary,
+    normalizeGeometry,
+    normalizePointsToBounds,
+    pointInPolygon,
   polygonsIntersect,
+  subtractPolygonLoops,
   triangulatePolygon,
 } from "../../studio/shared/geometry.js";
 import { createDefaultProject } from "../../studio/shared/project.js";
@@ -54,6 +56,25 @@ describe("studio geometry and composition", () => {
     expect(Math.max(...normalized.map((point) => point.x))).toBeCloseTo(1);
     expect(Math.min(...normalized.map((point) => point.y))).toBeCloseTo(0);
     expect(Math.max(...normalized.map((point) => point.y))).toBeCloseTo(1);
+  });
+
+  test("maps polygon vertices onto the unit-square boundary instead of a bbox interior", () => {
+    const mapped = mapPolygonPointsToUnitSquareBoundary([
+      { x: 0.08, y: 0.62 },
+      { x: 0.44, y: 0.12 },
+      { x: 0.92, y: 0.2 },
+      { x: 0.88, y: 0.84 },
+      { x: 0.22, y: 0.9 },
+    ]);
+
+    expect(mapped).toHaveLength(5);
+    mapped.forEach((point) => {
+      const onLeft = Math.abs(point.x) < 1e-6;
+      const onRight = Math.abs(point.x - 1) < 1e-6;
+      const onTop = Math.abs(point.y) < 1e-6;
+      const onBottom = Math.abs(point.y - 1) < 1e-6;
+      expect(onLeft || onRight || onTop || onBottom).toBe(true);
+    });
   });
 
   test("detects intersecting polygon contours", () => {
@@ -122,6 +143,28 @@ describe("studio geometry and composition", () => {
         expect(index).toBeLessThan(polygon.length);
       });
     });
+  });
+
+  test("subtracts an overlapping clip polygon into a notched visible surface loop", () => {
+    const visibleLoops = subtractPolygonLoops(
+      [
+        { x: 0.2, y: 0.2 },
+        { x: 0.9, y: 0.2 },
+        { x: 0.85, y: 0.85 },
+        { x: 0.15, y: 0.8 },
+      ],
+      [
+        { x: 0.72, y: 0.15 },
+        { x: 0.98, y: 0.28 },
+        { x: 0.74, y: 0.6 },
+      ]
+    );
+
+    expect(visibleLoops.length).toBe(1);
+    expect(visibleLoops[0].length).toBeGreaterThan(4);
+    expect(
+      visibleLoops[0].some((point) => point.x > 0.72 && point.y > 0.2 && point.y < 0.62)
+    ).toBe(true);
   });
 
   test("builds a stable render plan for global, local, paint and clip roles", () => {
