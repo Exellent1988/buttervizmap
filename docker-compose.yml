@@ -1,0 +1,11 @@
+services:
+  buttervizmap:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4177:4177"
+    environment:
+      PORT: "4177"
+    restart: unless-stopped
+

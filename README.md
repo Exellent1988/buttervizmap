@@ -1,6 +1,83 @@
-# Butterchurn
+# ButterVizMap
 
-Butterchurn is a WebGL implementation of the Milkdrop Visualizer
+ButterVizMap is a browser-based video-mapping studio built on top of a Butterchurn fork.
+
+The repository still contains the original Butterchurn rendering engine, but now adds a local studio application with:
+
+- a control route at `/admin`
+- a dedicated output route at `/output/:sessionId`
+- LAN viewer sync
+- a full repo-backed preset catalog plus curated starter presets
+- the converted `butterchurn-presets` catalog used by ButterchurnViz-compatible preset browsing
+- project import/export
+- scene recall
+- polygon and quad elements with clip, paint, shader-surface and interaction roles
+
+## Studio Quick Start
+
+Install dependencies:
+
+```bash
+pnpm install
+```
+
+Build the Butterchurn bundle used by the studio runtime:
+
+```bash
+pnpm build
+```
+
+Start the local studio server:
+
+```bash
+pnpm studio
+```
+
+Open:
+
+- `http://localhost:4177/admin` for the control panel
+- `http://<your-lan-ip>:4177/output/<sessionId>` for output viewers on the same network
+
+## Docker Deployment
+
+Build and run with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+The studio server will be available at `http://localhost:4177/admin`.
+
+The Docker image now includes the repository preset JSON catalog from `experiments/wasm-eel/presets`, so the preset browser and selector lists are not limited to the built-in studio presets.
+
+## Documentation
+
+- [Studio overview](/Users/axell/Documents/Projects/ButterVizMap/docs/studio-overview.md)
+- [Testing guide](/Users/axell/Documents/Projects/ButterVizMap/docs/testing.md)
+
+## Automated Tests
+
+Run the studio-focused suite:
+
+```bash
+pnpm test:studio
+```
+
+Run the non-visual automated suite:
+
+```bash
+pnpm test:unit
+```
+
+Run the existing visual regression suite:
+
+```bash
+pnpm test:visual
+```
+
+## Butterchurn Base
+
+Butterchurn is a WebGL implementation of the Milkdrop Visualizer.
 
 
 ## [Try it out](https://butterchurnviz.com)

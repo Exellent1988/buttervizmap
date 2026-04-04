@@ -1,0 +1,12 @@
+node_modules
+coverage
+.git
+.github
+test
+experiments/*
+!experiments/wasm-eel/
+experiments/wasm-eel/*
+!experiments/wasm-eel/presets/
+!experiments/wasm-eel/presets/**
+preview.png
+*.log
