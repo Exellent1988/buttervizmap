@@ -8,7 +8,9 @@ import {
   distanceToPolygonEdge,
   interpolateQuadPoint,
   normalizeGeometry,
+  normalizePointsToBounds,
   pointInPolygon,
+  polygonsIntersect,
   triangulatePolygon,
 } from "../../studio/shared/geometry.js";
 import { createDefaultProject } from "../../studio/shared/project.js";
@@ -38,6 +40,37 @@ describe("studio geometry and composition", () => {
     ];
 
     expect(distanceToPolygonEdge({ x: 0.5, y: 0.3 }, polygon)).toBeGreaterThan(0);
+  });
+
+  test("normalizes polygon points to their own bounds", () => {
+    const normalized = normalizePointsToBounds([
+      { x: 0.25, y: 0.2 },
+      { x: 0.75, y: 0.2 },
+      { x: 0.6, y: 0.8 },
+      { x: 0.3, y: 0.7 },
+    ]);
+
+    expect(Math.min(...normalized.map((point) => point.x))).toBeCloseTo(0);
+    expect(Math.max(...normalized.map((point) => point.x))).toBeCloseTo(1);
+    expect(Math.min(...normalized.map((point) => point.y))).toBeCloseTo(0);
+    expect(Math.max(...normalized.map((point) => point.y))).toBeCloseTo(1);
+  });
+
+  test("detects intersecting polygon contours", () => {
+    const left = [
+      { x: 0.15, y: 0.15 },
+      { x: 0.5, y: 0.1 },
+      { x: 0.46, y: 0.5 },
+      { x: 0.2, y: 0.48 },
+    ];
+    const right = [
+      { x: 0.4, y: 0.25 },
+      { x: 0.85, y: 0.22 },
+      { x: 0.82, y: 0.68 },
+      { x: 0.36, y: 0.62 },
+    ];
+
+    expect(polygonsIntersect(left, right)).toBe(true);
   });
 
   test("interpolates points across quad UV space", () => {
@@ -111,8 +144,10 @@ describe("studio geometry and composition", () => {
     expect(summary.some((entry) => entry.color === "#ff7d45")).toBe(true);
   });
 
-  test("includes clip elements in the boundary summary", () => {
+  test("includes only interaction-enabled boundaries and preserves clip source roles", () => {
     const project = createDefaultProject();
+    const clipElement = project.elements.find((entry) => entry.roles.clip);
+    clipElement.roles.interactionField = true;
     const summary = buildBoundarySummary(project);
 
     expect(summary.some((entry) => entry.sourceRole === "clip")).toBe(true);

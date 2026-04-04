@@ -140,4 +140,87 @@ describe("studio browser sync", () => {
       await outputPage.close();
     }
   });
+
+  test("admin keeps shader reaction controls editable and hides the old preset browser", async () => {
+    if (listenError) {
+      expect(listenError.code).toBe("EPERM");
+      return;
+    }
+
+    if (browserError) {
+      expect(browserError).toBeTruthy();
+      return;
+    }
+
+    const sessionId = "browser-admin-interaction-controls";
+    const adminPage = await createPage();
+
+    try {
+      await adminPage.evaluate((forcedSessionId) => {
+        localStorage.setItem("buttervizmap.sessionId", forcedSessionId);
+      }, sessionId);
+      await adminPage.goto(`http://127.0.0.1:${serverInfo.port}/admin`, {
+        waitUntil: "networkidle0",
+      });
+
+      await adminPage.waitForSelector("#shader-reaction-mode");
+      expect(await adminPage.$("#preset-list")).toBeNull();
+
+      await adminPage.evaluate(() => {
+        const checkbox = document.querySelector("#role-interactionField");
+        checkbox.checked = false;
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await adminPage.waitForFunction(() => {
+        const store = window.__buttervizmap?.store;
+        const selectedId = store?.state.selectedElementId;
+        const element = store?.state.project.elements.find((entry) => entry.id === selectedId);
+        return element?.roles?.interactionField === false;
+      });
+
+      await adminPage.evaluate(() => {
+        const checkbox = document.querySelector("#role-interactionField");
+        checkbox.checked = true;
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await adminPage.waitForFunction(() => {
+        const store = window.__buttervizmap?.store;
+        const selectedId = store?.state.selectedElementId;
+        const element = store?.state.project.elements.find((entry) => entry.id === selectedId);
+        return element?.roles?.interactionField === true;
+      });
+
+      await adminPage.evaluate(() => {
+        const select = document.querySelector("#shader-reaction-mode");
+        select.value = "reflect";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await adminPage.waitForFunction(() => {
+        const store = window.__buttervizmap?.store;
+        const selectedId = store?.state.selectedElementId;
+        const element = store?.state.project.elements.find((entry) => entry.id === selectedId);
+        return (
+          document.querySelector("#shader-reaction-mode")?.value === "reflect" &&
+          element?.shaderBinding?.reactionMode === "reflect"
+        );
+      });
+
+      const controlState = await adminPage.evaluate(() => {
+        const store = window.__buttervizmap?.store;
+        const selectedId = store?.state.selectedElementId;
+        const element = store?.state.project.elements.find((entry) => entry.id === selectedId);
+        return {
+          disabled: document.querySelector("#shader-reaction-mode")?.disabled ?? true,
+          reactionMode: element?.shaderBinding?.reactionMode ?? null,
+          interactionField: element?.roles?.interactionField ?? null,
+        };
+      });
+
+      expect(controlState.disabled).toBe(false);
+      expect(controlState.interactionField).toBe(true);
+      expect(controlState.reactionMode).toBe("reflect");
+    } finally {
+      await adminPage.close();
+    }
+  });
 });

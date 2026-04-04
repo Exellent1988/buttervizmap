@@ -94,7 +94,6 @@ export class AdminApp {
           <section id="session-panel"></section>
           <section id="element-list"></section>
           <section id="scene-list"></section>
-          <section id="preset-list"></section>
           <section id="debug-panel"></section>
         </div>
       </aside>
@@ -1584,7 +1583,9 @@ export class AdminApp {
       </div>
     `;
 
-    this.root.querySelector("#preset-list").innerHTML = `
+    const presetPanel = this.root.querySelector("#preset-list");
+    if (presetPanel) {
+      presetPanel.innerHTML = `
       <div class="panel-header">
         <h3>Presets</h3>
         <span class="tag">${visiblePresetEntries.length}/${state.project.presetLibrary.presets.length} visible</span>
@@ -1651,7 +1652,8 @@ export class AdminApp {
           )
           .join("")}
       </div>
-    `;
+      `;
+    }
 
     this.root.querySelector("#status-bar").innerHTML = `
       <span class="tag">Project <strong>${escapeHtml(state.project.meta.name)}</strong></span>
@@ -1772,7 +1774,7 @@ export class AdminApp {
         <div class="field-grid">
           <label ${makeTitle("Local shader preset used when the element acts as a shader surface.")}>
             Shader preset
-            <select id="element-preset" ${shaderSurfaceActive ? "" : "disabled"}>
+            <select id="element-preset">
               ${this.renderPresetOptions(
                 state.project.presetLibrary.presets,
                 selectedElement.shaderBinding.presetId
@@ -1788,11 +1790,11 @@ export class AdminApp {
         <div class="field-grid compact">
           <label ${makeTitle("Opacity of the local shader surface before additional blend and interaction effects are applied.")}>
             Shader opacity
-            <input id="shader-opacity" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.opacity}" ${shaderSurfaceActive ? "" : "disabled"} />
+            <input id="shader-opacity" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.opacity}" />
           </label>
           <label ${makeTitle("Canvas blend mode used when this shader surface is composited over the current output.")}>
             Blend mode
-            <select id="shader-blend-mode" ${shaderSurfaceActive ? "" : "disabled"}>
+            <select id="shader-blend-mode">
               <option value="normal" ${selectedElement.shaderBinding.blendMode === "normal" ? "selected" : ""}>Normal</option>
               <option value="screen" ${selectedElement.shaderBinding.blendMode === "screen" ? "selected" : ""}>Screen</option>
               <option value="add" ${selectedElement.shaderBinding.blendMode === "add" ? "selected" : ""}>Add</option>
@@ -1802,27 +1804,27 @@ export class AdminApp {
           </label>
           <label ${makeTitle("Scales the shader content within the selected surface. Useful for avoiding a flat fullscreen-clipped look.")}>
             Shader scale
-            <input id="shader-scale" type="number" min="0.25" max="3" step="0.05" value="${selectedElement.shaderBinding.scale}" ${shaderSurfaceActive ? "" : "disabled"} />
+            <input id="shader-scale" type="number" min="0.25" max="3" step="0.05" value="${selectedElement.shaderBinding.scale}" />
           </label>
           <label ${makeTitle("Rotates the mapped shader content inside the surface.")}>
             Rotation
-            <input id="shader-rotation" type="number" min="-180" max="180" step="1" value="${selectedElement.shaderBinding.rotation}" ${shaderSurfaceActive ? "" : "disabled"} />
+            <input id="shader-rotation" type="number" min="-180" max="180" step="1" value="${selectedElement.shaderBinding.rotation}" />
           </label>
           <label ${makeTitle("Offsets the local shader horizontally inside the surface. Values are relative to the surface width.")}>
             Offset X
-            <input id="shader-offset-x" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetX}" ${shaderSurfaceActive ? "" : "disabled"} />
+            <input id="shader-offset-x" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetX}" />
           </label>
           <label ${makeTitle("Offsets the local shader vertically inside the surface. Values are relative to the surface height.")}>
             Offset Y
-            <input id="shader-offset-y" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetY}" ${shaderSurfaceActive ? "" : "disabled"} />
+            <input id="shader-offset-y" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetY}" />
           </label>
           <label ${makeTitle("Controls how strongly nearby interaction fields distort, tint or pulse this shader surface.")}>
             Interaction mix
-            <input id="shader-interaction-mix" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.interactionMix}" ${shaderSurfaceActive ? "" : "disabled"} />
+            <input id="shader-interaction-mix" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.interactionMix}" />
           </label>
           <label ${makeTitle("Chooses how interaction fields affect the shader surface after the base Butterchurn frame is rendered.")}>
             Reaction mode
-            <select id="shader-reaction-mode" ${shaderSurfaceActive ? "" : "disabled"}>
+            <select id="shader-reaction-mode">
               <option value="tint" ${selectedElement.shaderBinding.reactionMode === "tint" ? "selected" : ""}>Tint</option>
               <option value="pulse" ${selectedElement.shaderBinding.reactionMode === "pulse" ? "selected" : ""}>Pulse</option>
               <option value="warp" ${selectedElement.shaderBinding.reactionMode === "warp" ? "selected" : ""}>Warp</option>

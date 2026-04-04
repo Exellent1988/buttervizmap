@@ -48,6 +48,19 @@ export function getPolygonBounds(points) {
   };
 }
 
+export function normalizePointsToBounds(points, bounds = getPolygonBounds(points), inset = 0) {
+  const width = Math.max(bounds.maxX - bounds.minX, Number.EPSILON);
+  const height = Math.max(bounds.maxY - bounds.minY, Number.EPSILON);
+  const normalizedInset = Math.max(0, Math.min(0.49, inset));
+  const innerWidth = 1 - normalizedInset * 2;
+  const innerHeight = 1 - normalizedInset * 2;
+
+  return points.map((point) => ({
+    x: normalizedInset + ((point.x - bounds.minX) / width) * innerWidth,
+    y: normalizedInset + ((point.y - bounds.minY) / height) * innerHeight,
+  }));
+}
+
 export function getPolygonCentroid(points) {
   const total = points.reduce(
     (accumulator, point) => ({
@@ -77,6 +90,41 @@ export function getSignedPolygonArea(points) {
 
 function getTriangleCross(a, b, c) {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function orientation(a, b, c) {
+  return getTriangleCross(a, b, c);
+}
+
+function onSegment(a, point, b) {
+  return (
+    Math.min(a.x, b.x) - 1e-9 <= point.x &&
+    point.x <= Math.max(a.x, b.x) + 1e-9 &&
+    Math.min(a.y, b.y) - 1e-9 <= point.y &&
+    point.y <= Math.max(a.y, b.y) + 1e-9
+  );
+}
+
+function segmentsIntersect(a1, a2, b1, b2) {
+  const o1 = orientation(a1, a2, b1);
+  const o2 = orientation(a1, a2, b2);
+  const o3 = orientation(b1, b2, a1);
+  const o4 = orientation(b1, b2, a2);
+
+  if (Math.abs(o1) < 1e-9 && onSegment(a1, b1, a2)) {
+    return true;
+  }
+  if (Math.abs(o2) < 1e-9 && onSegment(a1, b2, a2)) {
+    return true;
+  }
+  if (Math.abs(o3) < 1e-9 && onSegment(b1, a1, b2)) {
+    return true;
+  }
+  if (Math.abs(o4) < 1e-9 && onSegment(b1, a2, b2)) {
+    return true;
+  }
+
+  return (o1 > 0) !== (o2 > 0) && (o3 > 0) !== (o4 > 0);
 }
 
 function pointInTriangle(point, a, b, c) {
@@ -195,6 +243,34 @@ export function pointInPolygon(point, points) {
   }
 
   return inside;
+}
+
+export function polygonsIntersect(leftPoints, rightPoints) {
+  if (
+    leftPoints.some((point) => pointInPolygon(point, rightPoints)) ||
+    rightPoints.some((point) => pointInPolygon(point, leftPoints))
+  ) {
+    return true;
+  }
+
+  for (let leftIndex = 0; leftIndex < leftPoints.length; leftIndex += 1) {
+    const leftNextIndex = (leftIndex + 1) % leftPoints.length;
+    for (let rightIndex = 0; rightIndex < rightPoints.length; rightIndex += 1) {
+      const rightNextIndex = (rightIndex + 1) % rightPoints.length;
+      if (
+        segmentsIntersect(
+          leftPoints[leftIndex],
+          leftPoints[leftNextIndex],
+          rightPoints[rightIndex],
+          rightPoints[rightNextIndex]
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 export function distanceToSegment(point, segmentStart, segmentEnd) {

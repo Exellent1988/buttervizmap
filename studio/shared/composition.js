@@ -77,7 +77,7 @@ export function buildInteractionSummary(project) {
     )
     .map((element) => ({
       elementId: element.id,
-      sourceRole: "interactionField",
+      sourceRole: element.roles.clip ? "clip" : "interactionField",
       geometry: element.geometry,
       alpha: element.interaction.alpha,
       color: element.interaction.color,
@@ -90,22 +90,5 @@ export function buildInteractionSummary(project) {
 }
 
 export function buildBoundarySummary(project) {
-  return getSortedElements(project)
-    .filter(
-      (element) =>
-        element.enabled &&
-        (element.roles.clip || (element.roles.interactionField && element.interaction.enabled))
-    )
-    .map((element) => ({
-      elementId: element.id,
-      sourceRole: element.roles.clip ? "clip" : "interactionField",
-      geometry: element.geometry,
-      alpha: element.roles.clip ? 1 : element.interaction.alpha,
-      color: element.roles.clip ? "#ffffff" : element.interaction.color,
-      distance: element.roles.clip ? 0.7 : element.interaction.distance,
-      feather: element.style.feather,
-      pulse: element.roles.clip ? 0.15 : element.interaction.pulse,
-      swirl: element.roles.clip ? 0 : element.interaction.swirl,
-      influence: element.roles.clip ? 0.85 : element.interaction.influence,
-    }));
+  return buildInteractionSummary(project);
 }
