@@ -83,10 +83,7 @@ export function buildInteractionSummary(project) {
         cutterType,
         geometry: element.geometry,
         color: element.style.color,
-        hasShaderFill:
-          cutterType === "booleanCutterWithFill" &&
-          element.roles.shaderSurface &&
-          element.shaderBinding?.enabled !== false,
+        hasShaderFill: cutterType === "booleanCutterWithFill",
       };
     })
     .filter(Boolean);

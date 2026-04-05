@@ -187,19 +187,34 @@ describe("studio geometry and composition", () => {
     expect(summary.some((entry) => entry.cutterType === "booleanCutterWithFill")).toBe(true);
   });
 
-  test("reports shader fill only when cutter shader surfaces are enabled", () => {
+  test("reports shader fill for interaction-only cutters independent from shaderSurface role", () => {
     const project = createDefaultProject();
     const interactionOnlyElement = project.elements.find(
       (element) => !element.roles.clip && element.roles.interactionField
     );
-    interactionOnlyElement.roles.shaderSurface = true;
+    interactionOnlyElement.roles.shaderSurface = false;
     interactionOnlyElement.shaderBinding.enabled = false;
 
     const summary = buildInteractionSummary(project);
     const entry = summary.find((item) => item.elementId === interactionOnlyElement.id);
 
     expect(entry.cutterType).toBe("booleanCutterWithFill");
-    expect(entry.hasShaderFill).toBe(false);
+    expect(entry.hasShaderFill).toBe(true);
+  });
+
+  test("reports shader fill for interaction-only cutters when shader binding is enabled", () => {
+    const project = createDefaultProject();
+    const interactionOnlyElement = project.elements.find(
+      (element) => !element.roles.clip && element.roles.interactionField
+    );
+    interactionOnlyElement.roles.shaderSurface = false;
+    interactionOnlyElement.shaderBinding.enabled = true;
+
+    const summary = buildInteractionSummary(project);
+    const entry = summary.find((item) => item.elementId === interactionOnlyElement.id);
+
+    expect(entry.cutterType).toBe("booleanCutterWithFill");
+    expect(entry.hasShaderFill).toBe(true);
   });
 
   test("preserves cutter-mode classification in boundary summaries", () => {

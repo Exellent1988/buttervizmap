@@ -135,7 +135,7 @@ describe("studio compositor fill planning", () => {
     expect(steps[0].kind).toBe("eraseAndFill");
   });
 
-  test("plans an interaction-only cutter without shader as erase-only", () => {
+  test("plans an interaction-only cutter as erase+fill even when shader flag is false", () => {
     const steps = buildFillExecutionPlanForTarget({
       targetGeometry,
       cutters: [
@@ -156,7 +156,7 @@ describe("studio compositor fill planning", () => {
     });
 
     expect(steps).toHaveLength(1);
-    expect(steps[0].kind).toBe("eraseOnly");
+    expect(steps[0].kind).toBe("eraseAndFill");
   });
 
   test("plans clip+interaction cutters as erase-only", () => {
@@ -166,7 +166,7 @@ describe("studio compositor fill planning", () => {
         {
           elementId: "c1",
           cutterType: "booleanCutterNoFill",
-          shaderSurfaceEnabled: true,
+          shaderSurfaceEnabled: false,
           geometry: {
             kind: "polygon",
             points: [

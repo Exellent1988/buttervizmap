@@ -443,9 +443,21 @@ function createCutterDescriptor(element, orderIndex) {
     cutterType,
     geometry: element.geometry,
     shaderBinding: element.shaderBinding,
-    shaderSurfaceEnabled: element.roles.shaderSurface && element.shaderBinding.enabled,
+    shaderSurfaceEnabled: cutterType === "booleanCutterWithFill",
     clipRole: element.roles.clip,
   };
+}
+
+function elementNeedsShaderCanvas(element) {
+  if (!element?.enabled) {
+    return false;
+  }
+
+  if (getElementCutterType(element) === "booleanCutterWithFill") {
+    return true;
+  }
+
+  return element.roles?.shaderSurface === true && element.shaderBinding?.enabled !== false;
 }
 
 function geometryContainsAnyPoint(sourceGeometry, candidateGeometry) {
@@ -582,10 +594,7 @@ export function buildTargetCutStateForTarget({ targetGeometry, cutters = [] }) {
     const previousVisibleLoopEntries = cloneLoopEntries(visibleLoopEntries);
     visibleLoopEntries = subtractGeometryFromLoops(visibleLoopEntries, cutter.geometry);
     fillEvents.push({
-      kind:
-        cutter.cutterType === "booleanCutterWithFill" && cutter.shaderSurfaceEnabled
-          ? "eraseAndFill"
-          : "eraseOnly",
+      kind: cutter.cutterType === "booleanCutterWithFill" ? "eraseAndFill" : "eraseOnly",
       cutter,
       previousVisibleLoopEntries,
       currentVisibleLoopEntries: cloneLoopEntries(visibleLoopEntries),
@@ -617,27 +626,26 @@ function drawInteractionFillIntoCutArea({
   drawGeometryPath(context, cutter.geometry, width, height);
   context.clip();
   context.globalCompositeOperation = "source-over";
-  context.globalAlpha = Math.max(0, Math.min(1, cutter.shaderBinding.opacity ?? 1));
+  context.globalAlpha = 1;
   drawSurfaceCanvas(
     context,
     cutterShaderCanvas,
     cutter.geometry,
-    cutter.shaderBinding,
+    NEUTRAL_BINDING,
     width,
     height
   );
   context.restore();
 }
 
-function drawFillEventsIntoLayer({
-  context,
+function buildFillLayer({
   fillEvents,
   cutterShaderCanvases,
   width,
   height,
 }) {
   if (!fillEvents.length) {
-    return;
+    return null;
   }
 
   const fillLayer = createSizedCanvas(width, height);
@@ -658,10 +666,17 @@ function drawFillEventsIntoLayer({
       height,
     });
   });
+  return fillLayer;
+}
+
+function drawLayerCanvas(context, layerCanvas, width, height) {
+  if (!layerCanvas) {
+    return;
+  }
   context.save();
   context.globalCompositeOperation = "source-over";
   context.globalAlpha = 1;
-  context.drawImage(fillLayer, 0, 0, width, height);
+  context.drawImage(layerCanvas, 0, 0, width, height);
   context.restore();
 }
 
@@ -693,13 +708,13 @@ function drawPaintLayerWithPrecut({
   context.fill("evenodd");
   context.restore();
 
-  drawFillEventsIntoLayer({
-    context,
+  const fillLayer = buildFillLayer({
     fillEvents: cutState.fillEvents,
     cutterShaderCanvases,
     width,
     height,
   });
+  drawLayerCanvas(context, fillLayer, width, height);
   applyMaskCutters({
     context,
     maskCutters: cutState.maskCutters,
@@ -732,13 +747,13 @@ function drawGlobalLayerWithPrecut({
   });
   context.restore();
 
-  drawFillEventsIntoLayer({
-    context,
+  const fillLayer = buildFillLayer({
     fillEvents: cutState.fillEvents,
     cutterShaderCanvases,
     width,
     height,
   });
+  drawLayerCanvas(context, fillLayer, width, height);
   applyMaskCutters({
     context,
     maskCutters: cutState.maskCutters,
@@ -804,8 +819,7 @@ function drawShaderSurfaceWithPrecut({
     height,
   });
 
-  drawFillEventsIntoLayer({
-    context,
+  const fillLayer = buildFillLayer({
     fillEvents: cutState.fillEvents,
     cutterShaderCanvases,
     width,
@@ -817,8 +831,19 @@ function drawShaderSurfaceWithPrecut({
     width,
     height,
   });
+  if (fillLayer) {
+    applyMaskCutters({
+      context: fillLayer.getContext("2d"),
+      maskCutters: cutState.maskCutters,
+      width,
+      height,
+    });
+  }
 
-  return mapLoopEntriesToLoops(cutState.visibleLoopEntries);
+  return {
+    visibleLoops: mapLoopEntriesToLoops(cutState.visibleLoopEntries),
+    fillLayer,
+  };
 }
 
 export function buildFillExecutionPlanForTarget({ targetGeometry, cutters }) {
@@ -891,8 +916,8 @@ export class StudioCompositor {
       }
     }
 
-    const activeShaderElements = this.project.elements.filter(
-      (element) => element.enabled && element.roles.shaderSurface && element.shaderBinding.enabled
+    const activeShaderElements = this.project.elements.filter((element) =>
+      elementNeedsShaderCanvas(element)
     );
 
     for (const element of activeShaderElements) {
@@ -981,7 +1006,7 @@ export class StudioCompositor {
 
     const cutterShaderCanvases = new Map();
     for (const element of orderedElements) {
-      if (!(element.roles.shaderSurface && element.shaderBinding.enabled)) {
+      if (!elementNeedsShaderCanvas(element)) {
         continue;
       }
 
@@ -1038,13 +1063,14 @@ export class StudioCompositor {
 
     for (let targetIndex = 0; targetIndex < orderedElements.length; targetIndex += 1) {
       const element = orderedElements[targetIndex];
+      const elementCutterType = getElementCutterType(element);
       const cuttersAbove = cutters.filter((cutter) => cutter.orderIndex > targetIndex);
       const cutState = buildTargetCutStateForTarget({
         targetGeometry: element.geometry,
         cutters: cuttersAbove,
       });
 
-      if (element.roles.paint) {
+      if (element.roles.paint && elementCutterType !== "booleanCutterWithFill") {
         const paintLayer = createSizedCanvas(width, height);
         const paintContext = paintLayer.getContext("2d");
         drawPaintLayerWithPrecut({
@@ -1058,7 +1084,11 @@ export class StudioCompositor {
         this.context.drawImage(paintLayer, 0, 0, width, height);
       }
 
-      if (element.roles.shaderSurface && element.shaderBinding.enabled) {
+      if (
+        element.roles.shaderSurface &&
+        element.shaderBinding.enabled &&
+        elementCutterType !== "booleanCutterWithFill"
+      ) {
         const sourceCanvas = cutterShaderCanvases.get(element.id);
         if (!sourceCanvas) {
           continue;
@@ -1066,7 +1096,7 @@ export class StudioCompositor {
 
         const shaderLayer = createSizedCanvas(width, height);
         const shaderContext = shaderLayer.getContext("2d");
-        const visibleLoops = drawShaderSurfaceWithPrecut({
+        const { visibleLoops, fillLayer } = drawShaderSurfaceWithPrecut({
           context: shaderContext,
           sourceCanvas,
           targetGeometry: element.geometry,
@@ -1094,6 +1124,13 @@ export class StudioCompositor {
         this.context.globalAlpha = element.shaderBinding.opacity;
         this.context.drawImage(shaderLayer, 0, 0, width, height);
         this.context.restore();
+        if (fillLayer) {
+          this.context.save();
+          this.context.globalCompositeOperation = "source-over";
+          this.context.globalAlpha = 1;
+          this.context.drawImage(fillLayer, 0, 0, width, height);
+          this.context.restore();
+        }
       }
     }
   }
