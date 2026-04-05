@@ -396,6 +396,35 @@ export function subtractPolygonLoops(subjectPoints, clipPoints) {
   );
 }
 
+export function intersectPolygonLoops(subjectPoints, clipPoints) {
+  if (!polygonsIntersect(subjectPoints, clipPoints)) {
+    if (subjectPoints.every((point) => pointInPolygon(point, clipPoints))) {
+      return [subjectPoints];
+    }
+    if (clipPoints.every((point) => pointInPolygon(point, subjectPoints))) {
+      return [clipPoints];
+    }
+    return [];
+  }
+
+  const subjectArea = Math.abs(getSignedPolygonArea(subjectPoints));
+  const clipArea = Math.abs(getSignedPolygonArea(clipPoints));
+  const areaThreshold = Math.max(subjectArea, clipArea) * 0.005;
+  const subjectSegments = buildBoundarySegments(
+    subjectPoints,
+    clipPoints,
+    (midpoint) => pointInPolygon(midpoint, clipPoints)
+  );
+  const clipSegments = buildBoundarySegments(
+    clipPoints,
+    subjectPoints,
+    (midpoint) => pointInPolygon(midpoint, subjectPoints)
+  );
+  const loops = stitchBoundaryLoops([...subjectSegments, ...clipSegments]);
+
+  return loops.filter((loop) => Math.abs(getSignedPolygonArea(loop)) > areaThreshold);
+}
+
 function pointInTriangle(point, a, b, c) {
   const denominator =
     (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);

@@ -1,6 +1,7 @@
 import { getElementCutterType } from "../../shared/composition.js";
 import {
   getPolygonBounds,
+  intersectPolygonLoops,
   interpolateQuadPoint,
   mapPolygonPointsToUnitSquareBoundary,
   pointInPolygon,
@@ -558,6 +559,25 @@ function mapLoopEntriesToLoops(loopEntries) {
   return loopEntries.map((entry) => entry.points);
 }
 
+function buildIntersectionLoops(previousVisibleLoopEntries, cutterGeometry) {
+  const intersectionLoops = [];
+
+  previousVisibleLoopEntries.forEach((entry) => {
+    if (entry.hole || entry.points.length < 3) {
+      return;
+    }
+
+    const intersections = intersectPolygonLoops(entry.points, cutterGeometry.points);
+    intersections.forEach((loop) => {
+      if (loop.length >= 3) {
+        intersectionLoops.push(loop);
+      }
+    });
+  });
+
+  return intersectionLoops;
+}
+
 function toLoopGeometry(loop, fallbackGeometry) {
   if (fallbackGeometry.kind === "quad" && loopsEqual(loop, fallbackGeometry.points)) {
     return fallbackGeometry;
@@ -593,11 +613,16 @@ export function buildTargetCutStateForTarget({ targetGeometry, cutters = [] }) {
 
     const previousVisibleLoopEntries = cloneLoopEntries(visibleLoopEntries);
     visibleLoopEntries = subtractGeometryFromLoops(visibleLoopEntries, cutter.geometry);
+    const intersectionLoops = buildIntersectionLoops(
+      previousVisibleLoopEntries,
+      cutter.geometry
+    );
     fillEvents.push({
       kind: cutter.cutterType === "booleanCutterWithFill" ? "eraseAndFill" : "eraseOnly",
       cutter,
       previousVisibleLoopEntries,
       currentVisibleLoopEntries: cloneLoopEntries(visibleLoopEntries),
+      intersectionLoops,
     });
   });
 
@@ -611,36 +636,43 @@ export function buildTargetCutStateForTarget({ targetGeometry, cutters = [] }) {
 function drawInteractionFillIntoCutArea({
   context,
   previousVisibleLoops,
-  cutter,
-  cutterShaderCanvas,
+  intersectionLoops,
+  fillSourceCanvas,
   width,
   height,
 }) {
-  if (!cutterShaderCanvas || !previousVisibleLoops.length) {
+  if (!fillSourceCanvas || !previousVisibleLoops.length || !intersectionLoops.length) {
     return;
   }
 
   context.save();
   appendLoopsPath(context, previousVisibleLoops, width, height);
   context.clip("evenodd");
-  drawGeometryPath(context, cutter.geometry, width, height);
-  context.clip();
   context.globalCompositeOperation = "source-over";
   context.globalAlpha = 1;
-  drawSurfaceCanvas(
-    context,
-    cutterShaderCanvas,
-    cutter.geometry,
-    NEUTRAL_BINDING,
-    width,
-    height
-  );
+  intersectionLoops.forEach((loop) => {
+    if (loop.length < 3) {
+      return;
+    }
+    drawSurfaceCanvas(
+      context,
+      fillSourceCanvas,
+      {
+        kind: "polygon",
+        points: loop,
+      },
+      NEUTRAL_BINDING,
+      width,
+      height
+    );
+  });
   context.restore();
 }
 
 function buildFillLayer({
   fillEvents,
   cutterShaderCanvases,
+  targetFillSourceCanvas = null,
   width,
   height,
 }) {
@@ -657,11 +689,12 @@ function buildFillLayer({
     }
 
     const cutterShaderCanvas = cutterShaderCanvases.get(event.cutter.elementId);
+    const fillSourceCanvas = targetFillSourceCanvas ?? cutterShaderCanvas;
     drawInteractionFillIntoCutArea({
       context: fillContext,
       previousVisibleLoops: mapLoopEntriesToLoops(event.previousVisibleLoopEntries),
-      cutter: event.cutter,
-      cutterShaderCanvas,
+      intersectionLoops: event.intersectionLoops ?? [],
+      fillSourceCanvas,
       width,
       height,
     });
@@ -816,6 +849,7 @@ function drawShaderSurfaceWithPrecut({
   const fillLayer = buildFillLayer({
     fillEvents: cutState.fillEvents,
     cutterShaderCanvases,
+    targetFillSourceCanvas: sourceCanvas,
     width,
     height,
   });
@@ -846,6 +880,7 @@ export function buildFillExecutionPlanForTarget({ targetGeometry, cutters }) {
     kind: event.kind,
     previousVisibleLoops: mapLoopEntriesToLoops(event.previousVisibleLoopEntries),
     currentVisibleLoops: mapLoopEntriesToLoops(event.currentVisibleLoopEntries),
+    intersectionLoops: event.intersectionLoops ?? [],
     cutter: event.cutter,
   }));
 }

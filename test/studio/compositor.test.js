@@ -182,6 +182,34 @@ describe("studio compositor fill planning", () => {
     expect(steps).toHaveLength(1);
     expect(steps[0].kind).toBe("eraseOnly");
   });
+
+  test("uses intersection geometry (not full cutter geometry) for erase+fill events", () => {
+    const cutterPoints = [
+      { x: 0.82, y: 0.2 },
+      { x: 0.98, y: 0.4 },
+      { x: 0.64, y: 0.62 },
+    ];
+    const steps = buildFillExecutionPlanForTarget({
+      targetGeometry,
+      cutters: [
+        {
+          elementId: "i2",
+          cutterType: "booleanCutterWithFill",
+          shaderSurfaceEnabled: true,
+          geometry: {
+            kind: "polygon",
+            points: cutterPoints,
+          },
+        },
+      ],
+    });
+
+    expect(steps).toHaveLength(1);
+    expect(steps[0].kind).toBe("eraseAndFill");
+    expect(steps[0].intersectionLoops.length).toBeGreaterThan(0);
+    expect(steps[0].intersectionLoops.flat().every((point) => point.x <= 0.9 + 1e-6)).toBe(true);
+    expect(steps[0].intersectionLoops[0]).not.toEqual(cutterPoints);
+  });
 });
 
 describe("studio compositor target cut state", () => {

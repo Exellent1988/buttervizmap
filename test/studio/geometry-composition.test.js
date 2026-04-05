@@ -5,12 +5,13 @@ import {
   buildRenderPlan,
 } from "../../studio/shared/composition.js";
 import {
-    distanceToPolygonEdge,
-    interpolateQuadPoint,
-    mapPolygonPointsToUnitSquareBoundary,
-    normalizeGeometry,
-    normalizePointsToBounds,
-    pointInPolygon,
+  distanceToPolygonEdge,
+  intersectPolygonLoops,
+  interpolateQuadPoint,
+  mapPolygonPointsToUnitSquareBoundary,
+  normalizeGeometry,
+  normalizePointsToBounds,
+  pointInPolygon,
   polygonsIntersect,
   subtractPolygonLoops,
   triangulatePolygon,
@@ -165,6 +166,26 @@ describe("studio geometry and composition", () => {
     expect(
       visibleLoops[0].some((point) => point.x > 0.72 && point.y > 0.2 && point.y < 0.62)
     ).toBe(true);
+  });
+
+  test("computes intersection loops for partially overlapping polygons", () => {
+    const loops = intersectPolygonLoops(
+      [
+        { x: 0.2, y: 0.2 },
+        { x: 0.9, y: 0.2 },
+        { x: 0.85, y: 0.85 },
+        { x: 0.15, y: 0.8 },
+      ],
+      [
+        { x: 0.72, y: 0.15 },
+        { x: 0.98, y: 0.28 },
+        { x: 0.74, y: 0.6 },
+      ]
+    );
+
+    expect(loops.length).toBeGreaterThan(0);
+    expect(loops[0].every((point) => point.x <= 0.9 + 1e-6)).toBe(true);
+    expect(loops[0].some((point) => point.x < 0.75)).toBe(true);
   });
 
   test("builds a stable render plan for global, local, paint and clip roles", () => {
