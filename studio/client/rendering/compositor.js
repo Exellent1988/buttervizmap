@@ -746,14 +746,8 @@ function drawGlobalLayerWithPrecut({
     binding,
   });
   context.restore();
-
-  const fillLayer = buildFillLayer({
-    fillEvents: cutState.fillEvents,
-    cutterShaderCanvases,
-    width,
-    height,
-  });
-  drawLayerCanvas(context, fillLayer, width, height);
+  // Do not inject interaction fill onto the global full-canvas target,
+  // otherwise the cutter appears filled outside real local overlaps.
   applyMaskCutters({
     context,
     maskCutters: cutState.maskCutters,
