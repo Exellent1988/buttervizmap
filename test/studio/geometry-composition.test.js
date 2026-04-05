@@ -174,26 +174,41 @@ describe("studio geometry and composition", () => {
     expect(operations[0].type).toBe("globalShader");
     expect(operations.some((operation) => operation.type === "shaderSurface")).toBe(true);
     expect(operations.some((operation) => operation.type === "paint")).toBe(true);
-    expect(operations.some((operation) => operation.type === "clip")).toBe(true);
-    expect(operations.some((operation) => operation.type === "interactionField")).toBe(true);
+    expect(operations.some((operation) => operation.type === "maskCutter")).toBe(true);
+    expect(operations.some((operation) => operation.type === "booleanCutterWithFill")).toBe(true);
   });
 
-  test("summarizes only active interaction fields", () => {
+  test("summarizes only active cutters", () => {
     const project = createDefaultProject();
     const summary = buildInteractionSummary(project);
 
     expect(summary.length).toBeGreaterThanOrEqual(2);
-    expect(summary.every((entry) => typeof entry.alpha === "number")).toBe(true);
-    expect(summary.some((entry) => entry.color === "#ff7d45")).toBe(true);
+    expect(summary.every((entry) => typeof entry.cutterType === "string")).toBe(true);
+    expect(summary.some((entry) => entry.cutterType === "booleanCutterWithFill")).toBe(true);
   });
 
-  test("includes only interaction-enabled boundaries and preserves clip source roles", () => {
+  test("reports shader fill only when cutter shader surfaces are enabled", () => {
+    const project = createDefaultProject();
+    const interactionOnlyElement = project.elements.find(
+      (element) => !element.roles.clip && element.roles.interactionField
+    );
+    interactionOnlyElement.roles.shaderSurface = true;
+    interactionOnlyElement.shaderBinding.enabled = false;
+
+    const summary = buildInteractionSummary(project);
+    const entry = summary.find((item) => item.elementId === interactionOnlyElement.id);
+
+    expect(entry.cutterType).toBe("booleanCutterWithFill");
+    expect(entry.hasShaderFill).toBe(false);
+  });
+
+  test("preserves cutter-mode classification in boundary summaries", () => {
     const project = createDefaultProject();
     const clipElement = project.elements.find((entry) => entry.roles.clip);
     clipElement.roles.interactionField = true;
     const summary = buildBoundarySummary(project);
 
-    expect(summary.some((entry) => entry.sourceRole === "clip")).toBe(true);
-    expect(summary.some((entry) => entry.sourceRole === "interactionField")).toBe(true);
+    expect(summary.some((entry) => entry.cutterType === "booleanCutterNoFill")).toBe(true);
+    expect(summary.some((entry) => entry.cutterType === "booleanCutterWithFill")).toBe(true);
   });
 });

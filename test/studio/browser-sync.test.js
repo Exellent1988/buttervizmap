@@ -141,7 +141,7 @@ describe("studio browser sync", () => {
     }
   });
 
-  test("admin keeps shader reaction controls editable and hides the old preset browser", async () => {
+  test("admin keeps cutter role controls editable and hides the old preset browser", async () => {
     if (listenError) {
       expect(listenError.code).toBe("EPERM");
       return;
@@ -163,7 +163,7 @@ describe("studio browser sync", () => {
         waitUntil: "networkidle0",
       });
 
-      await adminPage.waitForSelector("#shader-reaction-mode");
+      await adminPage.waitForSelector("#shader-rotation");
       expect(await adminPage.$("#preset-list")).toBeNull();
 
       await adminPage.evaluate(() => {
@@ -191,17 +191,17 @@ describe("studio browser sync", () => {
       });
 
       await adminPage.evaluate(() => {
-        const select = document.querySelector("#shader-reaction-mode");
-        select.value = "reflect";
-        select.dispatchEvent(new Event("change", { bubbles: true }));
+        const input = document.querySelector("#shader-rotation");
+        input.value = "18";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
       });
       await adminPage.waitForFunction(() => {
         const store = window.__buttervizmap?.store;
         const selectedId = store?.state.selectedElementId;
         const element = store?.state.project.elements.find((entry) => entry.id === selectedId);
         return (
-          document.querySelector("#shader-reaction-mode")?.value === "reflect" &&
-          element?.shaderBinding?.reactionMode === "reflect"
+          Number(document.querySelector("#shader-rotation")?.value) === 18 &&
+          Number(element?.shaderBinding?.rotation) === 18
         );
       });
 
@@ -210,15 +210,15 @@ describe("studio browser sync", () => {
         const selectedId = store?.state.selectedElementId;
         const element = store?.state.project.elements.find((entry) => entry.id === selectedId);
         return {
-          disabled: document.querySelector("#shader-reaction-mode")?.disabled ?? true,
-          reactionMode: element?.shaderBinding?.reactionMode ?? null,
+          disabled: document.querySelector("#shader-rotation")?.disabled ?? true,
+          rotation: Number(element?.shaderBinding?.rotation ?? 0),
           interactionField: element?.roles?.interactionField ?? null,
         };
       });
 
       expect(controlState.disabled).toBe(false);
       expect(controlState.interactionField).toBe(true);
-      expect(controlState.reactionMode).toBe("reflect");
+      expect(controlState.rotation).toBe(18);
     } finally {
       await adminPage.close();
     }

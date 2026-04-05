@@ -1,14 +1,11 @@
-import { buildInteractionSummary } from "../../shared/composition.js";
+import { getElementCutterType } from "../../shared/composition.js";
 import {
-  distanceToPolygonEdge,
-  getMaxDistanceFromCentroid,
   getPolygonBounds,
-  getPolygonCentroid,
   interpolateQuadPoint,
   mapPolygonPointsToUnitSquareBoundary,
-  normalizePointsToBounds,
-  polygonsIntersect,
   pointInPolygon,
+  polygonsIntersect,
+  subtractPolygonLoops,
   triangulatePolygon,
 } from "../../shared/geometry.js";
 import { AdaptiveRenderer } from "./adaptiveRenderer.js";
@@ -32,191 +29,11 @@ const NEUTRAL_BINDING = {
   rotation: 0,
 };
 
-function drawGeometryPath(context, geometry, width, height) {
-  context.beginPath();
-  geometry.points.forEach((point, index) => {
-    const x = point.x * width;
-    const y = point.y * height;
-    if (index === 0) {
-      context.moveTo(x, y);
-    } else {
-      context.lineTo(x, y);
-    }
-  });
-  context.closePath();
-}
-
-function appendGeometrySubPath(context, geometry, width, height) {
-  geometry.points.forEach((point, index) => {
-    const x = point.x * width;
-    const y = point.y * height;
-    if (index === 0) {
-      context.moveTo(x, y);
-    } else {
-      context.lineTo(x, y);
-    }
-  });
-  context.closePath();
-}
-
-function fillRawGeometry(
-  context,
-  geometry,
-  width,
-  height,
-  color,
-  opacity,
-  feather = 0,
-  composite = "source-over"
-) {
-  const blurRadius = Math.round(Math.min(width, height) * Math.max(0, feather) * 0.18);
-
-  if (blurRadius <= 0) {
-    context.save();
-    context.globalCompositeOperation = composite;
-    context.globalAlpha = opacity;
-    context.fillStyle = color;
-    drawGeometryPath(context, geometry, width, height);
-    context.fill();
-    context.restore();
-    return;
-  }
-
-  // Keep the geometry core fully opaque and add feather only at the boundary.
-  // This avoids semi-transparent clip interiors on small polygons.
-  context.save();
-  context.globalCompositeOperation = composite;
-  context.globalAlpha = opacity;
-  context.fillStyle = color;
-  drawGeometryPath(context, geometry, width, height);
-  context.fill();
-  context.restore();
-
-  const maskCanvas = createSizedCanvas(width, height);
-  const maskContext = maskCanvas.getContext("2d");
-  maskContext.fillStyle = color;
-  drawGeometryPath(maskContext, geometry, width, height);
-  maskContext.fill();
-
-  context.save();
-  context.globalCompositeOperation = composite;
-  context.globalAlpha = opacity;
-  context.filter = `blur(${blurRadius}px)`;
-  context.drawImage(maskCanvas, 0, 0, width, height);
-  context.restore();
-}
-
-function fillGeometry(context, element, width, height, color, opacity, composite = "source-over") {
-  fillRawGeometry(
-    context,
-    element.geometry,
-    width,
-    height,
-    color,
-    opacity,
-    element.style?.feather ?? 0,
-    composite
-  );
-}
-
-function strokeRawGeometry(
-  context,
-  geometry,
-  width,
-  height,
-  color,
-  opacity,
-  lineWidth,
-  feather = 0,
-  composite = "source-over"
-) {
-  const blurRadius = Math.round(Math.min(width, height) * Math.max(0, feather) * 0.12);
-  const drawStroke = (targetContext) => {
-    targetContext.lineJoin = "round";
-    targetContext.lineCap = "round";
-    targetContext.strokeStyle = color;
-    targetContext.lineWidth = Math.max(1, lineWidth);
-    drawGeometryPath(targetContext, geometry, width, height);
-    targetContext.stroke();
-  };
-
-  if (blurRadius <= 0) {
-    context.save();
-    context.globalCompositeOperation = composite;
-    context.globalAlpha = opacity;
-    drawStroke(context);
-    context.restore();
-    return;
-  }
-
-  const strokeCanvas = createSizedCanvas(width, height);
-  const strokeContext = strokeCanvas.getContext("2d");
-  drawStroke(strokeContext);
-
-  context.save();
-  context.globalCompositeOperation = composite;
-  context.globalAlpha = opacity;
-  context.filter = `blur(${blurRadius}px)`;
-  context.drawImage(strokeCanvas, 0, 0, width, height);
-  context.restore();
-}
-
-function applyFinalClipFill(context, clipElements, width, height, fillColor) {
-  if (!clipElements.length) {
-    return;
-  }
-
-  clipElements.forEach((element) => {
-    fillGeometry(context, element, width, height, fillColor, 1, "source-over");
-  });
-}
-
 function createSizedCanvas(width, height) {
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(width));
   canvas.height = Math.max(1, Math.round(height));
   return canvas;
-}
-
-function createMaskedCanvas(sourceCanvas, maskCanvas, width, height) {
-  const maskedCanvas = createSizedCanvas(width, height);
-  const maskedContext = maskedCanvas.getContext("2d");
-  maskedContext.drawImage(maskCanvas, 0, 0, width, height);
-  maskedContext.globalCompositeOperation = "source-in";
-  maskedContext.drawImage(sourceCanvas, 0, 0, width, height);
-  return maskedCanvas;
-}
-
-function cloneCanvas(sourceCanvas, width, height) {
-  const clonedCanvas = createSizedCanvas(width, height);
-  clonedCanvas.getContext("2d").drawImage(sourceCanvas, 0, 0, width, height);
-  return clonedCanvas;
-}
-
-function intersectMaskCanvas(sourceCanvas, maskCanvas, width, height) {
-  const intersectedCanvas = cloneCanvas(sourceCanvas, width, height);
-  const intersectedContext = intersectedCanvas.getContext("2d");
-  intersectedContext.globalCompositeOperation = "destination-in";
-  intersectedContext.drawImage(maskCanvas, 0, 0, width, height);
-  return intersectedCanvas;
-}
-
-function subtractMaskCanvas(sourceCanvas, maskCanvas, width, height) {
-  const subtractedCanvas = cloneCanvas(sourceCanvas, width, height);
-  const subtractedContext = subtractedCanvas.getContext("2d");
-  subtractedContext.globalCompositeOperation = "destination-out";
-  subtractedContext.drawImage(maskCanvas, 0, 0, width, height);
-  return subtractedCanvas;
-}
-
-function tintMaskCanvas(maskCanvas, width, height, color) {
-  const tintedCanvas = createSizedCanvas(width, height);
-  const tintedContext = tintedCanvas.getContext("2d");
-  tintedContext.fillStyle = color;
-  tintedContext.fillRect(0, 0, width, height);
-  tintedContext.globalCompositeOperation = "destination-in";
-  tintedContext.drawImage(maskCanvas, 0, 0, width, height);
-  return tintedCanvas;
 }
 
 function mapBlendMode(mode = "normal") {
@@ -235,496 +52,60 @@ function mapBlendMode(mode = "normal") {
   return "source-over";
 }
 
-function normalizeToBounds(value, min, size) {
-  if (size <= 0) {
-    return 0;
-  }
-
-  return Math.max(0, Math.min(1, (value - min) / size));
-}
-
-function remapInteractionSummaryToBounds(interactionSummary, bounds) {
-  const width = Math.max(bounds.maxX - bounds.minX, 0.001);
-  const height = Math.max(bounds.maxY - bounds.minY, 0.001);
-  const scale = Math.max(width, height);
-
-  return interactionSummary.map((field) => ({
-    ...field,
-    geometry: {
-      ...field.geometry,
-      points: field.geometry.points.map((point) => ({
-        x: normalizeToBounds(point.x, bounds.minX, width),
-        y: normalizeToBounds(point.y, bounds.minY, height),
-      })),
-    },
-    centroid: {
-      x: normalizeToBounds(field.centroid.x, bounds.minX, width),
-      y: normalizeToBounds(field.centroid.y, bounds.minY, height),
-    },
-    maxDistance: field.maxDistance / scale,
-    edgeDistanceAtCentroid: field.edgeDistanceAtCentroid / scale,
-  }));
-}
-
-function getBoundsArea(bounds) {
-  return Math.max(0.000001, (bounds.maxX - bounds.minX) * (bounds.maxY - bounds.minY));
-}
-
-function getBoundsIntersectionArea(leftBounds, rightBounds) {
-  const width = Math.max(
-    0,
-    Math.min(leftBounds.maxX, rightBounds.maxX) - Math.max(leftBounds.minX, rightBounds.minX)
-  );
-  const height = Math.max(
-    0,
-    Math.min(leftBounds.maxY, rightBounds.maxY) - Math.max(leftBounds.minY, rightBounds.minY)
-  );
-
-  return width * height;
-}
-
-function estimateFieldOverlapWeight(field, surfaceGeometry, surfaceBounds, surfaceCentroid) {
-  const fieldBounds = getPolygonBounds(field.geometry.points);
-  const intersectionArea = getBoundsIntersectionArea(fieldBounds, surfaceBounds);
-  const fieldArea = getBoundsArea(fieldBounds);
-  const surfaceArea = getBoundsArea(surfaceBounds);
-  const overlapByField = intersectionArea / fieldArea;
-  const overlapBySurface = intersectionArea / surfaceArea;
-  const centroidInsideSurface = pointInPolygon(field.centroid, surfaceGeometry.points);
-  const surfaceCentroidInsideField = pointInPolygon(surfaceCentroid, field.geometry.points);
-  const edgesIntersect = polygonsIntersect(field.geometry.points, surfaceGeometry.points);
-
-  if (
-    intersectionArea <= 0 &&
-    !centroidInsideSurface &&
-    !surfaceCentroidInsideField &&
-    !edgesIntersect
-  ) {
-    return 0;
-  }
-
-  return Math.min(
-    1,
-    Math.max(
-      edgesIntersect ? 0.38 : 0,
-      overlapByField,
-      overlapBySurface * 0.75,
-      centroidInsideSurface ? 0.7 : 0,
-      surfaceCentroidInsideField ? 0.45 : 0
-    )
-  );
-}
-
-function buildSurfaceContourField(geometry) {
-  const centroid = getPolygonCentroid(geometry.points);
-  return {
-    elementId: `surface:${geometry.kind}`,
-    sourceRole: "surface",
-    contourOnly: true,
-    geometry,
-    centroid,
-    maxDistance: getMaxDistanceFromCentroid(geometry.points),
-    edgeDistanceAtCentroid: distanceToPolygonEdge(centroid, geometry.points),
-    alpha: geometry.kind === "polygon" ? 0.44 : 0.26,
-    color: "#ffffff",
-    distance: geometry.kind === "polygon" ? 0.28 : 0.18,
-    feather: 0,
-    pulse: geometry.kind === "polygon" ? 0.14 : 0.08,
-    swirl: 0,
-    influence: geometry.kind === "polygon" ? 0.74 : 0.46,
-  };
-}
-
-export function filterInteractionSummaryForGeometry(interactionSummary, geometry) {
-  const bounds = getPolygonBounds(geometry.points);
-  const surfaceCentroid = getPolygonCentroid(geometry.points);
-  return interactionSummary
-    .map((field) => {
-      const overlapWeight = estimateFieldOverlapWeight(
-        field,
-        geometry,
-        bounds,
-        surfaceCentroid
-      );
-      if (overlapWeight <= 0.015) {
-        return null;
-      }
-
-      return {
-        ...field,
-        overlapWeight,
-        alpha: Math.min(1, field.alpha * (0.35 + overlapWeight * 0.65)),
-        influence: Math.min(1, field.influence * (0.35 + overlapWeight * 0.65)),
-        pulse: field.pulse * (0.35 + overlapWeight * 0.65),
-        swirl: field.swirl * overlapWeight,
-      };
-    })
-    .filter(Boolean);
-}
-
-export function localizeInteractionSummaryToGeometry(interactionSummary, geometry) {
-  const bounds = getPolygonBounds(geometry.points);
-  return remapInteractionSummaryToBounds(
-    filterInteractionSummaryForGeometry(interactionSummary, geometry),
-    bounds
-  );
-}
-
-function getLocalizedSurfaceGeometry(geometry) {
-  if (geometry === FULL_CANVAS_GEOMETRY) {
-    return FULL_CANVAS_GEOMETRY;
-  }
-
-  return {
-    kind: geometry.kind,
-    points: normalizePointsToBounds(geometry.points),
-  };
-}
-
-function summarizeInteraction(interactionSummary, referenceGeometry = FULL_CANVAS_GEOMETRY) {
-  if (!interactionSummary.length) {
-    return {
-      energy: 0,
-      pulse: 0,
-      swirl: 0,
-      color: "rgba(255,255,255,0)",
-      offsetX: 0,
-      offsetY: 0,
-    };
-  }
-
-  let totalWeight = 0;
-  let red = 0;
-  let green = 0;
-  let blue = 0;
-  let pulse = 0;
-  let swirl = 0;
-  let offsetX = 0;
-  let offsetY = 0;
-  const referenceCentroid = getPolygonCentroid(referenceGeometry.points);
-  const referenceBounds = getPolygonBounds(referenceGeometry.points);
-  const referenceWidth = Math.max(referenceBounds.maxX - referenceBounds.minX, 0.001);
-  const referenceHeight = Math.max(referenceBounds.maxY - referenceBounds.minY, 0.001);
-
-  interactionSummary.forEach((field) => {
-    const weight = Math.max(0.001, field.alpha * (0.5 + field.influence));
-    totalWeight += weight;
-    pulse += field.pulse * weight;
-    swirl += field.swirl * weight;
-    offsetX += ((field.centroid.x - referenceCentroid.x) / referenceWidth) * weight;
-    offsetY += ((field.centroid.y - referenceCentroid.y) / referenceHeight) * weight;
-
-    const normalized = field.color.replace("#", "");
-    const sixChar = normalized.length === 3
-      ? normalized
-          .split("")
-          .map((value) => `${value}${value}`)
-          .join("")
-      : normalized.padEnd(6, "0").slice(0, 6);
-    red += parseInt(sixChar.slice(0, 2), 16) * weight;
-    green += parseInt(sixChar.slice(2, 4), 16) * weight;
-    blue += parseInt(sixChar.slice(4, 6), 16) * weight;
-  });
-
-  return {
-    energy: Math.min(1, totalWeight / Math.max(1, interactionSummary.length)),
-    pulse: pulse / totalWeight,
-    swirl: swirl / totalWeight,
-    offsetX: Math.max(-1, Math.min(1, offsetX / totalWeight)),
-    offsetY: Math.max(-1, Math.min(1, offsetY / totalWeight)),
-    color: `rgb(${Math.round(red / totalWeight)}, ${Math.round(green / totalWeight)}, ${Math.round(
-      blue / totalWeight
-    )})`,
-  };
-}
-
-function buildSurfaceEffectCanvas({
-  sourceCanvas,
-  localizedSurfaceGeometry,
-  localizedInteractionSources,
-  interactionState,
-  binding,
-  width,
-  height,
-}) {
-  const effectCanvas = createSizedCanvas(width, height);
-  const effectContext = effectCanvas.getContext("2d");
-  drawCanvasWithBinding({
-    context: effectContext,
-    sourceCanvas,
-    drawX: 0,
-    drawY: 0,
-    drawWidth: width,
-    drawHeight: height,
-    binding: {
-      ...binding,
-      opacity: 1,
-      blendMode: "normal",
-    },
-  });
-  applySurfaceInteractionEffect({
-    context: effectContext,
-    surfaceGeometry: localizedSurfaceGeometry,
-    interactionSources: localizedInteractionSources,
-    interactionState,
-    binding,
-    width,
-    height,
-  });
-  return effectCanvas;
-}
-
-function buildInteractionReactionMasks({
-  interactionSources,
-  surfaceGeometry,
-  width,
-  height,
-  includeSurfaceContour = true,
-}) {
-  const fillMask = createSizedCanvas(width, height);
-  const fillColor = createSizedCanvas(width, height);
-  const contourMask = createSizedCanvas(width, height);
-  const contourColor = createSizedCanvas(width, height);
-  const fillMaskContext = fillMask.getContext("2d");
-  const fillColorContext = fillColor.getContext("2d");
-  const contourMaskContext = contourMask.getContext("2d");
-  const contourColorContext = contourColor.getContext("2d");
-  const effectSources = includeSurfaceContour
-    ? [...interactionSources, buildSurfaceContourField(surfaceGeometry)]
-    : interactionSources;
-
-  effectSources.forEach((field) => {
-    const overlapWeight = field.overlapWeight ?? 1;
-    const roleBoost =
-      field.sourceRole === "clip" ? 1.22 : field.sourceRole === "surface" ? 1.08 : 0.92;
-    const fillOpacity = field.contourOnly
-      ? 0
-      : Math.min(
-          0.92,
-          field.alpha * overlapWeight * (0.16 + field.influence * 0.26) * roleBoost
-        );
-    const contourOpacity = Math.min(
-      0.96,
-      field.alpha * overlapWeight * (0.24 + field.influence * 0.36) * roleBoost
-    );
-    const contourWidth =
-      Math.max(2, Math.min(width, height) * (0.004 + field.distance * 0.014 + field.feather * 0.01)) *
-      roleBoost;
-    const fieldGeometryMask = createSizedCanvas(width, height);
-    const fieldFillMask = createSizedCanvas(width, height);
-    const fieldStrokeMask = createSizedCanvas(width, height);
-
-    fillRawGeometry(
-      fieldGeometryMask.getContext("2d"),
-      field.geometry,
-      width,
-      height,
-      "#ffffff",
-      1,
-      0
-    );
-
-    if (fillOpacity > 0.001) {
-      fillRawGeometry(
-        fieldFillMask.getContext("2d"),
-        field.geometry,
-        width,
-        height,
-        "#ffffff",
-        fillOpacity,
-        field.feather
-      );
-      fillMaskContext.drawImage(fieldFillMask, 0, 0, width, height);
-      fillColorContext.drawImage(
-        tintMaskCanvas(fieldFillMask, width, height, field.color),
-        0,
-        0,
-        width,
-        height
-      );
+function drawGeometryPath(context, geometry, width, height) {
+  context.beginPath();
+  geometry.points.forEach((point, index) => {
+    const x = point.x * width;
+    const y = point.y * height;
+    if (index === 0) {
+      context.moveTo(x, y);
+    } else {
+      context.lineTo(x, y);
     }
-
-    strokeRawGeometry(
-      fieldStrokeMask.getContext("2d"),
-      field.geometry,
-      width,
-      height,
-      "#ffffff",
-      contourOpacity,
-      contourWidth,
-      field.feather
-    );
-    const insideContourMask = intersectMaskCanvas(
-      fieldStrokeMask,
-      fieldGeometryMask,
-      width,
-      height
-    );
-    const outsideContourMask = subtractMaskCanvas(
-      fieldStrokeMask,
-      fieldGeometryMask,
-      width,
-      height
-    );
-    const contourTargetMask =
-      field.sourceRole === "clip"
-        ? outsideContourMask
-        : field.sourceRole === "surface"
-          ? insideContourMask
-          : fieldStrokeMask;
-    const contourTint =
-      field.sourceRole === "surface"
-        ? "#ffffff"
-        : field.sourceRole === "clip"
-          ? field.color
-          : field.color;
-
-    contourMaskContext.drawImage(contourTargetMask, 0, 0, width, height);
-    contourColorContext.drawImage(
-      tintMaskCanvas(contourTargetMask, width, height, contourTint),
-      0,
-      0,
-      width,
-      height
-    );
   });
-
-  return {
-    fillMask,
-    fillColor,
-    contourMask,
-    contourColor,
-  };
+  context.closePath();
 }
 
-function applySurfaceInteractionEffect({
+function appendPolygonSubPath(context, points, width, height) {
+  points.forEach((point, index) => {
+    const x = point.x * width;
+    const y = point.y * height;
+    if (index === 0) {
+      context.moveTo(x, y);
+    } else {
+      context.lineTo(x, y);
+    }
+  });
+  context.closePath();
+}
+
+function appendLoopsPath(context, loops, width, height) {
+  context.beginPath();
+  loops.forEach((loop) => {
+    appendPolygonSubPath(context, loop, width, height);
+  });
+}
+
+function fillRawGeometry(
   context,
-  surfaceGeometry,
-  interactionSources,
-  interactionState,
-  binding,
+  geometry,
   width,
   height,
-  includeSurfaceContour = true,
-}) {
-  if (
-    (binding.interactionMix ?? 0) <= 0.001 ||
-    (!interactionSources.length && !includeSurfaceContour)
-  ) {
-    return;
-  }
-
-  const reactionMode = binding.reactionMode ?? "tint";
-  const reactionMix = (binding.interactionMix ?? 0) * Math.max(0.25, interactionState.energy || 0);
-  const snapshot = createSizedCanvas(width, height);
-  snapshot.getContext("2d").drawImage(context.canvas, 0, 0, width, height);
-  const masks = buildInteractionReactionMasks({
-    interactionSources,
-    surfaceGeometry,
-    width,
-    height,
-    includeSurfaceContour,
-  });
-  const fillTexture = createMaskedCanvas(snapshot, masks.fillMask, width, height);
-  const contourTexture = createMaskedCanvas(snapshot, masks.contourMask, width, height);
-  const contourDark = tintMaskCanvas(masks.contourMask, width, height, "#000000");
-  const surfaceCentroid = getPolygonCentroid(surfaceGeometry.points);
-  const centroidX = surfaceCentroid.x * width;
-  const centroidY = surfaceCentroid.y * height;
-  const shiftX = interactionState.offsetX * width * (0.04 + reactionMix * 0.1);
-  const shiftY = interactionState.offsetY * height * (0.04 + reactionMix * 0.1);
-  const tangentX = -interactionState.offsetY * width * (0.03 + interactionState.swirl * 0.06);
-  const tangentY = interactionState.offsetX * height * (0.03 + interactionState.swirl * 0.06);
-
+  color,
+  opacity,
+  composite = "source-over"
+) {
   context.save();
-  drawGeometryPath(context, surfaceGeometry, width, height);
-  context.clip();
-
-  if (reactionMode === "glow") {
-    context.globalCompositeOperation = "multiply";
-    context.globalAlpha = 0.08 + reactionMix * 0.1;
-    context.drawImage(contourDark, 0, 0, width, height);
-    context.globalCompositeOperation = "screen";
-    context.globalAlpha = 0.2 + reactionMix * 0.24;
-    context.drawImage(masks.contourColor, 0, 0, width, height);
-    context.globalCompositeOperation = "lighter";
-    context.globalAlpha = 0.12 + reactionMix * 0.2;
-    context.drawImage(contourTexture, 0, 0, width, height);
-    context.globalAlpha = 0.1 + reactionMix * 0.16;
-    context.drawImage(contourTexture, shiftX, shiftY, width, height);
-    context.globalAlpha = 0.08 + reactionMix * 0.14;
-    context.drawImage(contourTexture, -shiftX, -shiftY, width, height);
-    context.globalCompositeOperation = "soft-light";
-    context.globalAlpha = 0.1 + reactionMix * 0.14;
-    context.drawImage(masks.fillColor, 0, 0, width, height);
-  } else if (reactionMode === "warp") {
-    context.globalCompositeOperation = "multiply";
-    context.globalAlpha = 0.06 + reactionMix * 0.08;
-    context.drawImage(contourDark, 0, 0, width, height);
-    context.globalCompositeOperation = "screen";
-    context.globalAlpha = 0.12 + reactionMix * 0.16;
-    context.drawImage(fillTexture, shiftX, shiftY, width, height);
-    context.globalCompositeOperation = "overlay";
-    context.globalAlpha = 0.1 + reactionMix * 0.14;
-    context.drawImage(fillTexture, -shiftX * 0.55 + tangentX, -shiftY * 0.55 + tangentY, width, height);
-    context.globalCompositeOperation = "lighter";
-    context.globalAlpha = 0.1 + reactionMix * 0.16;
-    context.drawImage(contourTexture, tangentX, tangentY, width, height);
-    context.globalCompositeOperation = "screen";
-    context.globalAlpha = 0.1 + reactionMix * 0.12;
-    context.drawImage(masks.contourColor, 0, 0, width, height);
-  } else if (reactionMode === "pulse") {
-    const growth = 1 + reactionMix * (0.06 + interactionState.pulse * 0.08);
-    context.globalCompositeOperation = "multiply";
-    context.globalAlpha = 0.06 + reactionMix * 0.08;
-    context.drawImage(contourDark, 0, 0, width, height);
-    context.save();
-    context.translate(centroidX, centroidY);
-    context.scale(growth, growth);
-    context.translate(-centroidX, -centroidY);
-    context.globalCompositeOperation = "lighter";
-    context.globalAlpha = 0.12 + reactionMix * 0.2;
-    context.drawImage(fillTexture, 0, 0, width, height);
-    context.restore();
-    context.globalCompositeOperation = "screen";
-    context.globalAlpha = 0.12 + reactionMix * 0.14;
-    context.drawImage(contourTexture, 0, 0, width, height);
-    context.globalCompositeOperation = "soft-light";
-    context.globalAlpha = 0.1 + reactionMix * 0.14;
-    context.drawImage(masks.fillColor, 0, 0, width, height);
-  } else if (reactionMode === "reflect") {
-    context.globalCompositeOperation = "multiply";
-    context.globalAlpha = 0.06 + reactionMix * 0.08;
-    context.drawImage(contourDark, 0, 0, width, height);
-    context.save();
-    context.translate(centroidX, centroidY);
-    context.scale(-1, 1);
-    context.translate(-centroidX, -centroidY);
-    context.globalCompositeOperation = "screen";
-    context.globalAlpha = 0.1 + reactionMix * 0.16;
-    context.drawImage(fillTexture, 0, 0, width, height);
-    context.restore();
-    context.globalCompositeOperation = "lighter";
-    context.globalAlpha = 0.1 + reactionMix * 0.16;
-    context.drawImage(contourTexture, -shiftX * 0.4, -shiftY * 0.4, width, height);
-    context.globalCompositeOperation = "screen";
-    context.globalAlpha = 0.08 + reactionMix * 0.12;
-    context.drawImage(masks.contourColor, 0, 0, width, height);
-  } else {
-    context.globalCompositeOperation = "multiply";
-    context.globalAlpha = 0.08 + reactionMix * 0.1;
-    context.drawImage(contourDark, 0, 0, width, height);
-    context.globalCompositeOperation = "soft-light";
-    context.globalAlpha = 0.16 + reactionMix * 0.22;
-    context.drawImage(masks.fillColor, 0, 0, width, height);
-    context.globalCompositeOperation = "screen";
-    context.globalAlpha = 0.12 + reactionMix * 0.16;
-    context.drawImage(contourTexture, 0, 0, width, height);
-    context.globalAlpha = 0.1 + reactionMix * 0.12;
-    context.drawImage(masks.contourColor, 0, 0, width, height);
-  }
-
+  context.globalCompositeOperation = composite;
+  context.globalAlpha = opacity;
+  context.fillStyle = color;
+  drawGeometryPath(context, geometry, width, height);
+  context.fill();
   context.restore();
+}
+
+function eraseGeometry(context, geometry, width, height) {
+  fillRawGeometry(context, geometry, width, height, "#000000", 1, "destination-out");
 }
 
 function drawTexturedTriangle(
@@ -777,6 +158,26 @@ function drawTexturedTriangle(
   context.transform(a, b, c, d, e, f);
   context.drawImage(image, 0, 0);
   context.restore();
+}
+
+function transformSourceSamplePoint(sourceX, sourceY, sourceWidth, sourceHeight, binding) {
+  const sourceCenter = {
+    x: sourceWidth / 2,
+    y: sourceHeight / 2,
+  };
+  const scale = binding.scale ?? 1;
+  const driftX = (binding.offsetX ?? 0) * sourceWidth * 0.5;
+  const driftY = (binding.offsetY ?? 0) * sourceHeight * 0.5;
+  const rotation = ((binding.rotation ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  const localX = (sourceX - sourceCenter.x) * scale;
+  const localY = (sourceY - sourceCenter.y) * scale;
+
+  return {
+    x: sourceCenter.x + driftX + localX * cos - localY * sin,
+    y: sourceCenter.y + driftY + localX * sin + localY * cos,
+  };
 }
 
 function drawWarpedQuad(context, sourceCanvas, geometry, binding, outputWidth, outputHeight) {
@@ -863,40 +264,7 @@ function drawWarpedQuad(context, sourceCanvas, geometry, binding, outputWidth, o
   }
 }
 
-function transformSourceSamplePoint(
-  sourceX,
-  sourceY,
-  sourceWidth,
-  sourceHeight,
-  binding
-) {
-  const sourceCenter = {
-    x: sourceWidth / 2,
-    y: sourceHeight / 2,
-  };
-  const scale = binding.scale ?? 1;
-  const driftX = (binding.offsetX ?? 0) * sourceWidth * 0.5;
-  const driftY = (binding.offsetY ?? 0) * sourceHeight * 0.5;
-  const rotation = ((binding.rotation ?? 0) * Math.PI) / 180;
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-  const localX = (sourceX - sourceCenter.x) * scale;
-  const localY = (sourceY - sourceCenter.y) * scale;
-
-  return {
-    x: sourceCenter.x + driftX + localX * cos - localY * sin,
-    y: sourceCenter.y + driftY + localX * sin + localY * cos,
-  };
-}
-
-function drawWarpedPolygon(
-  context,
-  sourceCanvas,
-  geometry,
-  binding,
-  outputWidth,
-  outputHeight
-) {
+function drawWarpedPolygon(context, sourceCanvas, geometry, binding, outputWidth, outputHeight) {
   const normalizedSourcePoints = mapPolygonPointsToUnitSquareBoundary(geometry.points);
   const transformedSourcePoints = normalizedSourcePoints.map((point) =>
     transformSourceSamplePoint(
@@ -940,6 +308,15 @@ function drawWarpedPolygon(
   });
 }
 
+function drawSurfaceCanvas(context, sourceCanvas, geometry, binding, outputWidth, outputHeight) {
+  if (geometry.kind === "quad") {
+    drawWarpedQuad(context, sourceCanvas, geometry, binding, outputWidth, outputHeight);
+    return;
+  }
+
+  drawWarpedPolygon(context, sourceCanvas, geometry, binding, outputWidth, outputHeight);
+}
+
 function drawCanvasWithBinding({
   context,
   sourceCanvas,
@@ -970,138 +347,18 @@ function drawCanvasWithBinding({
   context.restore();
 }
 
-function drawSurfaceCanvas(
-  context,
-  sourceCanvas,
-  geometry,
-  binding,
-  outputWidth,
-  outputHeight
-) {
-  if (geometry.kind === "quad") {
-    drawWarpedQuad(context, sourceCanvas, geometry, binding, outputWidth, outputHeight);
-    return;
-  }
-
-  drawWarpedPolygon(context, sourceCanvas, geometry, binding, outputWidth, outputHeight);
-}
-
-function geometryContainsAnyPoint(sourceGeometry, candidateGeometry) {
-  return candidateGeometry.points.some((point) => pointInPolygon(point, sourceGeometry.points));
-}
-
-function doesClipAffectSurface(surfaceGeometry, clipGeometry) {
-  return (
-    polygonsIntersect(surfaceGeometry.points, clipGeometry.points) ||
-    geometryContainsAnyPoint(surfaceGeometry, clipGeometry) ||
-    geometryContainsAnyPoint(clipGeometry, surfaceGeometry)
-  );
-}
-
-function drawWithinSurfaceMinusClipGeometries({
-  context,
-  surfaceGeometry,
-  clipGeometries,
-  width,
-  height,
-  draw,
-}) {
-  if (!clipGeometries.length) {
-    draw();
-    return;
-  }
-
-  context.save();
-  context.beginPath();
-  appendGeometrySubPath(context, surfaceGeometry, width, height);
-  clipGeometries.forEach((clipGeometry) => {
-    appendGeometrySubPath(context, clipGeometry, width, height);
-  });
-  context.clip("evenodd");
-  draw();
-  context.restore();
-}
-
-function subtractClipGeometriesFromLayer({
-  context,
-  clipGeometries,
-  width,
-  height,
-}) {
-  if (!clipGeometries.length) {
-    return;
-  }
-
-  clipGeometries.forEach((clipGeometry) => {
-    // Hard subtraction as the final step prevents any residual reaction/blend
-    // color from remaining inside clipped intersections.
-    fillRawGeometry(
-      context,
-      clipGeometry,
-      width,
-      height,
-      "#000000",
-      1,
-      0,
-      "destination-out"
-    );
-  });
-}
-
-function roundDebugCoordinate(value) {
-  return Number(value).toFixed(4);
-}
-
-function getGeometrySignature(geometry) {
-  return `${geometry.kind}:${geometry.points
-    .map((point) => `${roundDebugCoordinate(point.x)},${roundDebugCoordinate(point.y)}`)
-    .join(";")}`;
-}
-
-function getInteractionSourcesSignature(interactionSources) {
-  return interactionSources
-    .map(
-      (field) =>
-        `${field.elementId}:${field.sourceRole}:${getGeometrySignature(field.geometry)}:${roundDebugCoordinate(
-          field.alpha
-        )}:${roundDebugCoordinate(field.distance)}:${roundDebugCoordinate(
-          field.feather
-        )}:${roundDebugCoordinate(field.influence)}:${field.color}`
-    )
-    .join("|");
-}
-
-function parseHexColor(hex) {
-  const normalized = String(hex ?? "#ffffff").replace("#", "");
-  const sixChar = normalized.length === 3
-    ? normalized
-        .split("")
-        .map((value) => `${value}${value}`)
-        .join("")
-    : normalized.padEnd(6, "0").slice(0, 6);
-
-  return {
-    r: parseInt(sixChar.slice(0, 2), 16),
-    g: parseInt(sixChar.slice(2, 4), 16),
-    b: parseInt(sixChar.slice(4, 6), 16),
-  };
-}
-
 function pointInTriangle2D(point, triangle) {
   const [a, b, c] = triangle;
-  const denominator =
-    (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+  const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
 
   if (Math.abs(denominator) < 1e-9) {
     return false;
   }
 
   const alpha =
-    ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) /
-    denominator;
+    ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / denominator;
   const beta =
-    ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) /
-    denominator;
+    ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / denominator;
   const gamma = 1 - alpha - beta;
 
   return alpha >= -1e-6 && beta >= -1e-6 && gamma >= -1e-6;
@@ -1109,19 +366,16 @@ function pointInTriangle2D(point, triangle) {
 
 function getBarycentricCoordinates(point, triangle) {
   const [a, b, c] = triangle;
-  const denominator =
-    (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+  const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
 
   if (Math.abs(denominator) < 1e-9) {
     return null;
   }
 
   const alpha =
-    ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) /
-    denominator;
+    ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / denominator;
   const beta =
-    ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) /
-    denominator;
+    ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / denominator;
   const gamma = 1 - alpha - beta;
 
   return { alpha, beta, gamma };
@@ -1131,14 +385,8 @@ function applyBarycentricCoordinates(barycentric, triangle) {
   const [a, b, c] = triangle;
 
   return {
-    x:
-      a.x * barycentric.alpha +
-      b.x * barycentric.beta +
-      c.x * barycentric.gamma,
-    y:
-      a.y * barycentric.alpha +
-      b.y * barycentric.beta +
-      c.y * barycentric.gamma,
+    x: a.x * barycentric.alpha + b.x * barycentric.beta + c.x * barycentric.gamma,
+    y: a.y * barycentric.alpha + b.y * barycentric.beta + c.y * barycentric.gamma,
   };
 }
 
@@ -1183,257 +431,404 @@ export function mapDomainPointToSurfacePoint(mapping, domainPoint) {
   return null;
 }
 
-function smoothFalloff(distance, radius) {
-  if (radius <= 1e-6) {
-    return 0;
+function createCutterDescriptor(element, orderIndex) {
+  const cutterType = getElementCutterType(element);
+  if (!cutterType) {
+    return null;
   }
-
-  const normalized = Math.max(0, Math.min(1, 1 - distance / radius));
-  return normalized * normalized * (3 - 2 * normalized);
-}
-
-function accumulateWeightedColor(accumulator, color, alpha) {
-  if (alpha <= 1e-6) {
-    return;
-  }
-
-  accumulator.alpha += alpha;
-  accumulator.r += color.r * alpha;
-  accumulator.g += color.g * alpha;
-  accumulator.b += color.b * alpha;
-}
-
-function writeWeightedPixel(buffer, index, accumulator) {
-  if (accumulator.alpha <= 1e-6) {
-    buffer[index + 0] = 0;
-    buffer[index + 1] = 0;
-    buffer[index + 2] = 0;
-    buffer[index + 3] = 0;
-    return;
-  }
-
-  buffer[index + 0] = Math.round(accumulator.r / accumulator.alpha);
-  buffer[index + 1] = Math.round(accumulator.g / accumulator.alpha);
-  buffer[index + 2] = Math.round(accumulator.b / accumulator.alpha);
-  buffer[index + 3] = Math.round(Math.max(0, Math.min(1, accumulator.alpha)) * 255);
-}
-
-export function buildSurfaceReactionTextures({
-  surfaceGeometry,
-  clipGeometries = [],
-  interactionSources,
-  width,
-  height,
-}) {
-  const mapping = buildSurfaceDomainMapping(surfaceGeometry);
-  const fillCanvas = createSizedCanvas(width, height);
-  const contourCanvas = createSizedCanvas(width, height);
-  const visibilityCanvas = createSizedCanvas(width, height);
-  const fillImage = fillCanvas
-    .getContext("2d")
-    .createImageData(width, height);
-  const contourImage = contourCanvas
-    .getContext("2d")
-    .createImageData(width, height);
-  const visibilityImage = visibilityCanvas
-    .getContext("2d")
-    .createImageData(width, height);
-  const fillData = fillImage.data;
-  const contourData = contourImage.data;
-  const visibilityData = visibilityImage.data;
-  const sourceDomainGeometry = mapping.domainGeometry;
-  const surfaceColor = parseHexColor("#ffffff");
-
-  for (let y = 0; y < height; y += 1) {
-    const v = (y + 0.5) / height;
-    for (let x = 0; x < width; x += 1) {
-      const u = (x + 0.5) / width;
-      const domainPoint = { x: u, y: v };
-      const pixelIndex = (y * width + x) * 4;
-
-      if (
-        surfaceGeometry.kind === "polygon" &&
-        !pointInPolygon(domainPoint, sourceDomainGeometry.points)
-      ) {
-        continue;
-      }
-
-      const destinationPoint = mapDomainPointToSurfacePoint(mapping, domainPoint);
-      if (!destinationPoint) {
-        continue;
-      }
-
-      const visibleAfterClips = !clipGeometries.some((clipGeometry) =>
-        pointInPolygon(destinationPoint, clipGeometry.points)
-      );
-
-      if (!visibleAfterClips) {
-        continue;
-      }
-
-      visibilityData[pixelIndex + 0] = 255;
-      visibilityData[pixelIndex + 1] = 255;
-      visibilityData[pixelIndex + 2] = 255;
-      visibilityData[pixelIndex + 3] = 255;
-
-      const fillAccumulator = { r: 0, g: 0, b: 0, alpha: 0 };
-      const contourAccumulator = { r: 0, g: 0, b: 0, alpha: 0 };
-      const surfaceContourRadius = surfaceGeometry.kind === "polygon" ? 0.016 : 0.011;
-      const surfaceContourStrength = smoothFalloff(
-        distanceToPolygonEdge(destinationPoint, surfaceGeometry.points),
-        surfaceContourRadius
-      );
-
-      accumulateWeightedColor(
-        contourAccumulator,
-        surfaceColor,
-        surfaceContourStrength * (surfaceGeometry.kind === "polygon" ? 0.72 : 0.46)
-      );
-
-      interactionSources.forEach((field) => {
-        const fieldColor = parseHexColor(field.color);
-        const distanceToEdge = distanceToPolygonEdge(destinationPoint, field.geometry.points);
-        const contourRadius = 0.006 + field.distance * 0.05 + field.feather * 0.02;
-        const insideField = pointInPolygon(destinationPoint, field.geometry.points);
-        const fillStrength =
-          field.sourceRole === "clip" || !insideField
-            ? 0
-            : field.alpha * (0.12 + field.influence * 0.3);
-        const contourStrength = smoothFalloff(distanceToEdge, contourRadius);
-
-        if (fillStrength > 0) {
-          accumulateWeightedColor(fillAccumulator, fieldColor, fillStrength);
-        }
-
-        if (field.sourceRole === "clip") {
-          if (!insideField && contourStrength > 0) {
-            accumulateWeightedColor(
-              contourAccumulator,
-              fieldColor,
-              contourStrength * field.alpha * (0.3 + field.influence * 0.7)
-            );
-          }
-          return;
-        }
-
-        if (contourStrength > 0) {
-          accumulateWeightedColor(
-            contourAccumulator,
-            fieldColor,
-            contourStrength * field.alpha * (0.22 + field.influence * 0.66)
-          );
-        }
-      });
-
-      writeWeightedPixel(fillData, pixelIndex, fillAccumulator);
-      writeWeightedPixel(contourData, pixelIndex, contourAccumulator);
-    }
-  }
-
-  fillCanvas.getContext("2d").putImageData(fillImage, 0, 0);
-  contourCanvas.getContext("2d").putImageData(contourImage, 0, 0);
-  visibilityCanvas.getContext("2d").putImageData(visibilityImage, 0, 0);
 
   return {
-    fillCanvas,
-    contourCanvas,
-    visibilityCanvas,
+    elementId: element.id,
+    orderIndex,
+    cutterType,
+    geometry: element.geometry,
+    shaderBinding: element.shaderBinding,
+    shaderSurfaceEnabled: element.roles.shaderSurface && element.shaderBinding.enabled,
+    clipRole: element.roles.clip,
   };
 }
 
-function applySurfaceVisibilityMask({
+function geometryContainsAnyPoint(sourceGeometry, candidateGeometry) {
+  return candidateGeometry.points.some((point) => pointInPolygon(point, sourceGeometry.points));
+}
+
+function cutterAffectsTarget(targetGeometry, cutterGeometry) {
+  return (
+    polygonsIntersect(targetGeometry.points, cutterGeometry.points) ||
+    geometryContainsAnyPoint(targetGeometry, cutterGeometry) ||
+    geometryContainsAnyPoint(cutterGeometry, targetGeometry)
+  );
+}
+
+function clonePoints(points) {
+  return points.map((point) => ({ ...point }));
+}
+
+function pointsEqual(left, right, epsilon = 1e-6) {
+  return Math.abs(left.x - right.x) <= epsilon && Math.abs(left.y - right.y) <= epsilon;
+}
+
+function loopsEqual(left, right) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((point, index) => pointsEqual(point, right[index]));
+}
+
+function subtractGeometryFromLoops(loopEntries, cutterGeometry) {
+  const nextLoops = [];
+
+  loopEntries.forEach((entry) => {
+    if (entry.hole) {
+      nextLoops.push(entry);
+      return;
+    }
+
+    const loop = entry.points;
+    const cutterInsideLoop = cutterGeometry.points.every((point) => pointInPolygon(point, loop));
+    const loopInsideCutter = loop.every((point) => pointInPolygon(point, cutterGeometry.points));
+    const intersects = polygonsIntersect(loop, cutterGeometry.points);
+
+    if (loopInsideCutter) {
+      return;
+    }
+
+    if (intersects) {
+      const subtracted = subtractPolygonLoops(loop, cutterGeometry.points);
+      const unchanged = subtracted.length === 1 && loopsEqual(subtracted[0], loop);
+      if (unchanged && cutterInsideLoop) {
+        nextLoops.push(entry);
+        nextLoops.push({
+          points: clonePoints([...cutterGeometry.points].reverse()),
+          hole: true,
+        });
+        return;
+      }
+      subtracted.forEach((subtractedLoop) => {
+        if (subtractedLoop.length >= 3) {
+          nextLoops.push({ points: subtractedLoop, hole: false });
+        }
+      });
+      return;
+    }
+
+    nextLoops.push(entry);
+    if (cutterInsideLoop) {
+      nextLoops.push({
+        points: clonePoints([...cutterGeometry.points].reverse()),
+        hole: true,
+      });
+    }
+  });
+
+  return nextLoops;
+}
+
+export function applyBooleanCutSequence({ geometry, cutters = [] }) {
+  let loops = [{ points: clonePoints(geometry.points), hole: false }];
+
+  cutters.forEach((cutterGeometry) => {
+    loops = subtractGeometryFromLoops(loops, cutterGeometry);
+  });
+
+  return loops.map((entry) => entry.points);
+}
+
+function cloneLoopEntries(loopEntries) {
+  return loopEntries.map((entry) => ({
+    points: clonePoints(entry.points),
+    hole: entry.hole === true,
+  }));
+}
+
+function mapLoopEntriesToLoops(loopEntries) {
+  return loopEntries.map((entry) => entry.points);
+}
+
+function toLoopGeometry(loop, fallbackGeometry) {
+  if (fallbackGeometry.kind === "quad" && loopsEqual(loop, fallbackGeometry.points)) {
+    return fallbackGeometry;
+  }
+
+  return {
+    kind: "polygon",
+    points: loop,
+  };
+}
+
+export function buildTargetCutStateForTarget({ targetGeometry, cutters = [] }) {
+  let visibleLoopEntries = [{ points: clonePoints(targetGeometry.points), hole: false }];
+  const fillEvents = [];
+  const maskCutters = [];
+
+  cutters.forEach((cutter) => {
+    if (!cutterAffectsTarget(targetGeometry, cutter.geometry)) {
+      return;
+    }
+
+    if (cutter.cutterType === "maskCutter") {
+      maskCutters.push(cutter);
+      return;
+    }
+
+    if (
+      cutter.cutterType !== "booleanCutterNoFill" &&
+      cutter.cutterType !== "booleanCutterWithFill"
+    ) {
+      return;
+    }
+
+    const previousVisibleLoopEntries = cloneLoopEntries(visibleLoopEntries);
+    visibleLoopEntries = subtractGeometryFromLoops(visibleLoopEntries, cutter.geometry);
+    fillEvents.push({
+      kind:
+        cutter.cutterType === "booleanCutterWithFill" && cutter.shaderSurfaceEnabled
+          ? "eraseAndFill"
+          : "eraseOnly",
+      cutter,
+      previousVisibleLoopEntries,
+      currentVisibleLoopEntries: cloneLoopEntries(visibleLoopEntries),
+    });
+  });
+
+  return {
+    visibleLoopEntries: cloneLoopEntries(visibleLoopEntries),
+    fillEvents,
+    maskCutters,
+  };
+}
+
+function drawInteractionFillIntoCutArea({
   context,
-  geometry,
-  visibilityCanvas,
-  outputWidth,
-  outputHeight,
+  previousVisibleLoops,
+  cutter,
+  cutterShaderCanvas,
+  width,
+  height,
 }) {
+  if (!cutterShaderCanvas || !previousVisibleLoops.length) {
+    return;
+  }
+
   context.save();
-  context.globalCompositeOperation = "destination-in";
-  context.globalAlpha = 1;
+  appendLoopsPath(context, previousVisibleLoops, width, height);
+  context.clip("evenodd");
+  drawGeometryPath(context, cutter.geometry, width, height);
+  context.clip();
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = Math.max(0, Math.min(1, cutter.shaderBinding.opacity ?? 1));
   drawSurfaceCanvas(
     context,
-    visibilityCanvas,
-    geometry,
-    NEUTRAL_BINDING,
-    outputWidth,
-    outputHeight
+    cutterShaderCanvas,
+    cutter.geometry,
+    cutter.shaderBinding,
+    width,
+    height
   );
   context.restore();
 }
 
-function drawSurfaceReactionPrototype({
+function drawFillEventsIntoLayer({
   context,
-  geometry,
-  fillCanvas,
-  contourCanvas,
-  visibilityCanvas,
-  binding,
-  outputWidth,
-  outputHeight,
+  fillEvents,
+  cutterShaderCanvases,
+  width,
+  height,
 }) {
-  const reactionMode = binding.reactionMode ?? "tint";
-  const interactionMix = binding.interactionMix ?? 0;
-
-  if (interactionMix <= 0.001) {
+  if (!fillEvents.length) {
     return;
   }
 
-  const drawLayer = (canvas, composite, alpha) => {
-    if (alpha <= 0.001) {
+  const fillLayer = createSizedCanvas(width, height);
+  const fillContext = fillLayer.getContext("2d");
+  fillEvents.forEach((event) => {
+    eraseGeometry(fillContext, event.cutter.geometry, width, height);
+    if (event.kind !== "eraseAndFill") {
       return;
     }
 
-    context.save();
-    context.globalCompositeOperation = composite;
-    context.globalAlpha = alpha;
-    drawSurfaceCanvas(
-      context,
-      canvas,
-      geometry,
-      NEUTRAL_BINDING,
-      outputWidth,
-      outputHeight
-    );
-    if (visibilityCanvas) {
-      applySurfaceVisibilityMask({
+    const cutterShaderCanvas = cutterShaderCanvases.get(event.cutter.elementId);
+    drawInteractionFillIntoCutArea({
+      context: fillContext,
+      previousVisibleLoops: mapLoopEntriesToLoops(event.previousVisibleLoopEntries),
+      cutter: event.cutter,
+      cutterShaderCanvas,
+      width,
+      height,
+    });
+  });
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = 1;
+  context.drawImage(fillLayer, 0, 0, width, height);
+  context.restore();
+}
+
+function applyMaskCutters({
+  context,
+  maskCutters,
+  width,
+  height,
+}) {
+  maskCutters.forEach((cutter) => {
+    eraseGeometry(context, cutter.geometry, width, height);
+  });
+}
+
+function drawPaintLayerWithPrecut({
+  context,
+  targetStyle,
+  cutState,
+  cutterShaderCanvases,
+  width,
+  height,
+}) {
+  const visibleLoops = mapLoopEntriesToLoops(cutState.visibleLoopEntries);
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = targetStyle.opacity;
+  context.fillStyle = targetStyle.color;
+  appendLoopsPath(context, visibleLoops, width, height);
+  context.fill("evenodd");
+  context.restore();
+
+  drawFillEventsIntoLayer({
+    context,
+    fillEvents: cutState.fillEvents,
+    cutterShaderCanvases,
+    width,
+    height,
+  });
+  applyMaskCutters({
+    context,
+    maskCutters: cutState.maskCutters,
+    width,
+    height,
+  });
+}
+
+function drawGlobalLayerWithPrecut({
+  context,
+  sourceCanvas,
+  binding,
+  cutState,
+  cutterShaderCanvases,
+  width,
+  height,
+}) {
+  const visibleLoops = mapLoopEntriesToLoops(cutState.visibleLoopEntries);
+  context.save();
+  appendLoopsPath(context, visibleLoops, width, height);
+  context.clip("evenodd");
+  drawCanvasWithBinding({
+    context,
+    sourceCanvas,
+    drawX: 0,
+    drawY: 0,
+    drawWidth: width,
+    drawHeight: height,
+    binding,
+  });
+  context.restore();
+
+  drawFillEventsIntoLayer({
+    context,
+    fillEvents: cutState.fillEvents,
+    cutterShaderCanvases,
+    width,
+    height,
+  });
+  applyMaskCutters({
+    context,
+    maskCutters: cutState.maskCutters,
+    width,
+    height,
+  });
+}
+
+function drawShaderSurfaceLoops({
+  context,
+  sourceCanvas,
+  targetGeometry,
+  binding,
+  visibleLoopEntries,
+  width,
+  height,
+}) {
+  visibleLoopEntries
+    .filter((entry) => !entry.hole && entry.points.length >= 3)
+    .forEach((entry) => {
+      drawSurfaceCanvas(
         context,
-        geometry,
-        visibilityCanvas,
-        outputWidth,
-        outputHeight,
-      });
-    }
-    context.restore();
-  };
+        sourceCanvas,
+        toLoopGeometry(entry.points, targetGeometry),
+        binding,
+        width,
+        height
+      );
+    });
 
-  if (reactionMode === "glow") {
-    drawLayer(contourCanvas, "screen", 0.25 + interactionMix * 0.45);
-    drawLayer(contourCanvas, "lighter", 0.12 + interactionMix * 0.28);
-    drawLayer(fillCanvas, "soft-light", 0.08 + interactionMix * 0.16);
-    return;
-  }
+  visibleLoopEntries
+    .filter((entry) => entry.hole && entry.points.length >= 3)
+    .forEach((entry) => {
+      eraseGeometry(
+        context,
+        {
+          kind: "polygon",
+          points: entry.points,
+        },
+        width,
+        height
+      );
+    });
+}
 
-  if (reactionMode === "warp") {
-    drawLayer(fillCanvas, "overlay", 0.12 + interactionMix * 0.24);
-    drawLayer(contourCanvas, "screen", 0.08 + interactionMix * 0.2);
-    return;
-  }
+function drawShaderSurfaceWithPrecut({
+  context,
+  sourceCanvas,
+  targetGeometry,
+  binding,
+  cutState,
+  cutterShaderCanvases,
+  width,
+  height,
+}) {
+  drawShaderSurfaceLoops({
+    context,
+    sourceCanvas,
+    targetGeometry,
+    binding,
+    visibleLoopEntries: cutState.visibleLoopEntries,
+    width,
+    height,
+  });
 
-  if (reactionMode === "pulse") {
-    drawLayer(fillCanvas, "lighter", 0.12 + interactionMix * 0.2);
-    drawLayer(contourCanvas, "screen", 0.1 + interactionMix * 0.22);
-    return;
-  }
+  drawFillEventsIntoLayer({
+    context,
+    fillEvents: cutState.fillEvents,
+    cutterShaderCanvases,
+    width,
+    height,
+  });
+  applyMaskCutters({
+    context,
+    maskCutters: cutState.maskCutters,
+    width,
+    height,
+  });
 
-  if (reactionMode === "reflect") {
-    drawLayer(fillCanvas, "screen", 0.1 + interactionMix * 0.2);
-    drawLayer(contourCanvas, "lighter", 0.08 + interactionMix * 0.18);
-    return;
-  }
+  return mapLoopEntriesToLoops(cutState.visibleLoopEntries);
+}
 
-  drawLayer(fillCanvas, "soft-light", 0.14 + interactionMix * 0.24);
-  drawLayer(contourCanvas, "screen", 0.12 + interactionMix * 0.22);
+export function buildFillExecutionPlanForTarget({ targetGeometry, cutters }) {
+  const cutState = buildTargetCutStateForTarget({ targetGeometry, cutters });
+  return cutState.fillEvents.map((event) => ({
+    kind: event.kind,
+    previousVisibleLoops: mapLoopEntriesToLoops(event.previousVisibleLoopEntries),
+    currentVisibleLoops: mapLoopEntriesToLoops(event.currentVisibleLoopEntries),
+    cutter: event.cutter,
+  }));
 }
 
 export class StudioCompositor {
@@ -1448,13 +843,11 @@ export class StudioCompositor {
       global: null,
       elements: new Map(),
     };
-    this.surfaceReactionCache = new Map();
     this.lastVisibleSurfaceGeometries = [];
   }
 
   async setProject(project) {
     this.project = project;
-    this.surfaceReactionCache.clear();
     this.lastVisibleSurfaceGeometries = [];
     await this.ensureRendererGraph();
   }
@@ -1474,6 +867,7 @@ export class StudioCompositor {
       meshWidth: this.project.output.rendering.meshWidth,
       meshHeight: this.project.output.rendering.meshHeight,
     };
+
     if (!this.globalRenderer) {
       this.globalRenderer = new AdaptiveRenderer(width, height);
     }
@@ -1572,210 +966,135 @@ export class StudioCompositor {
     const width = this.project.output.width;
     const height = this.project.output.height;
     this.lastVisibleSurfaceGeometries = [];
-    const interactionSummary = buildInteractionSummary(this.project).map((field) => {
-      const centroid = getPolygonCentroid(field.geometry.points);
-      return {
-        ...field,
-        centroid,
-        maxDistance: getMaxDistanceFromCentroid(field.geometry.points),
-        edgeDistanceAtCentroid: distanceToPolygonEdge(centroid, field.geometry.points),
-      };
-    });
 
     this.context.clearRect(0, 0, width, height);
     this.context.fillStyle = this.project.output.background;
     this.context.fillRect(0, 0, width, height);
 
+    const orderedElements = [...this.project.elements]
+      .filter((element) => element.enabled)
+      .sort((left, right) => left.zIndex - right.zIndex);
+
+    const cutters = orderedElements
+      .map((element, index) => createCutterDescriptor(element, index))
+      .filter(Boolean);
+
+    const cutterShaderCanvases = new Map();
+    for (const element of orderedElements) {
+      if (!(element.roles.shaderSurface && element.shaderBinding.enabled)) {
+        continue;
+      }
+
+      const renderer = this.elementRenderers.get(element.id);
+      if (!renderer) {
+        continue;
+      }
+
+      await renderer.resize(width, height);
+      await renderer.render({
+        timestamp,
+        audioFrame: this.audioFrame,
+        interactionSummary: [],
+      });
+      cutterShaderCanvases.set(element.id, renderer.getCanvas());
+    }
+
     if (this.project.globalLayer.enabled && this.globalRenderer) {
-      const globalInteractionSources = filterInteractionSummaryForGeometry(
-        interactionSummary,
-        FULL_CANVAS_GEOMETRY
-      );
-      const globalInteraction = summarizeInteraction(
-        globalInteractionSources,
-        FULL_CANVAS_GEOMETRY
-      );
       await this.globalRenderer.render({
         timestamp,
         audioFrame: this.audioFrame,
-        interactionSummary,
+        interactionSummary: [],
       });
-      const globalSurface = buildSurfaceEffectCanvas({
+
+      const globalLayer = createSizedCanvas(width, height);
+      const globalLayerContext = globalLayer.getContext("2d");
+      const globalCutState = buildTargetCutStateForTarget({
+        targetGeometry: FULL_CANVAS_GEOMETRY,
+        cutters,
+      });
+      drawGlobalLayerWithPrecut({
+        context: globalLayerContext,
         sourceCanvas: this.globalRenderer.getCanvas(),
-        localizedSurfaceGeometry: FULL_CANVAS_GEOMETRY,
-        localizedInteractionSources: globalInteractionSources,
-        interactionState: globalInteraction,
         binding: {
           opacity: 1,
           blendMode: "normal",
           scale: this.project.globalLayer.scale,
-          offsetX: globalInteraction.offsetX * this.project.globalLayer.drift,
-          offsetY: globalInteraction.offsetY * this.project.globalLayer.drift,
-          rotation: globalInteraction.swirl * this.project.globalLayer.drift * 14,
-          interactionMix: this.project.globalLayer.interactionMix,
-          reactionMode: "glow",
+          offsetX: 0,
+          offsetY: 0,
+          rotation: 0,
         },
+        cutState: globalCutState,
+        cutterShaderCanvases,
         width,
         height,
       });
+
       this.context.save();
       this.context.globalAlpha = this.project.globalLayer.opacity;
       this.context.globalCompositeOperation = "source-over";
-      this.context.drawImage(globalSurface, 0, 0, width, height);
+      this.context.drawImage(globalLayer, 0, 0, width, height);
       this.context.restore();
     }
 
-    const orderedElements = [...this.project.elements]
-      .filter((element) => element.enabled)
-      .sort((left, right) => left.zIndex - right.zIndex);
-    const clipElements = orderedElements.filter((element) => element.roles.clip);
-    const interactionEngine = this.project.output.rendering.interactionEngine ?? "compositor";
+    for (let targetIndex = 0; targetIndex < orderedElements.length; targetIndex += 1) {
+      const element = orderedElements[targetIndex];
+      const cuttersAbove = cutters.filter((cutter) => cutter.orderIndex > targetIndex);
+      const cutState = buildTargetCutStateForTarget({
+        targetGeometry: element.geometry,
+        cutters: cuttersAbove,
+      });
 
-    for (let elementIndex = 0; elementIndex < orderedElements.length; elementIndex += 1) {
-      const element = orderedElements[elementIndex];
       if (element.roles.paint) {
-        fillGeometry(
-          this.context,
-          element,
+        const paintLayer = createSizedCanvas(width, height);
+        const paintContext = paintLayer.getContext("2d");
+        drawPaintLayerWithPrecut({
+          context: paintContext,
+          targetStyle: element.style,
+          cutState,
+          cutterShaderCanvases,
           width,
           height,
-          element.style.color,
-          element.style.opacity
-        );
+        });
+        this.context.drawImage(paintLayer, 0, 0, width, height);
       }
 
       if (element.roles.shaderSurface && element.shaderBinding.enabled) {
-        const renderer = this.elementRenderers.get(element.id);
-        if (renderer) {
-          const bounds = getPolygonBounds(element.geometry.points);
-          const drawWidth = Math.max(1, Math.round((bounds.maxX - bounds.minX) * width));
-          const drawHeight = Math.max(1, Math.round((bounds.maxY - bounds.minY) * height));
-          await renderer.resize(drawWidth, drawHeight);
-          const surfaceInteractionSources = filterInteractionSummaryForGeometry(
-            interactionSummary,
-            element.geometry
-          );
-          const surfaceClipElements = orderedElements.filter(
-            (candidate) =>
-              candidate.roles.clip &&
-              candidate.id !== element.id &&
-              doesClipAffectSurface(element.geometry, candidate.geometry)
-          );
-          const surfaceClipGeometries = surfaceClipElements.map((candidate) => candidate.geometry);
-          this.lastVisibleSurfaceGeometries.push({
-            elementId: element.id,
-            elementName: element.name,
-            sourceGeometry: element.geometry,
-            clipGeometries: surfaceClipGeometries,
-            visibleGeometries: [element.geometry],
-            visibilityMode: "surface-minus-clips-evenodd",
-            drawWidth,
-            drawHeight,
-          });
-          const cacheKey = [
-            element.id,
-            `${drawWidth}x${drawHeight}`,
-            getGeometrySignature(element.geometry),
-            surfaceClipGeometries.map(getGeometrySignature).join("|"),
-            getInteractionSourcesSignature(surfaceInteractionSources),
-          ].join("::");
-          let reactionAsset = this.surfaceReactionCache.get(cacheKey);
-          if (!reactionAsset) {
-            reactionAsset = buildSurfaceReactionTextures({
-              surfaceGeometry: element.geometry,
-              clipGeometries: surfaceClipGeometries,
-              interactionSources: surfaceInteractionSources,
-              width: drawWidth,
-              height: drawHeight,
-            });
-            this.surfaceReactionCache.set(cacheKey, reactionAsset);
-          }
-          const rendererPrototypeEnabled =
-            interactionEngine === "renderer" && renderer.getRuntimeMode?.() === "butterchurn";
-          renderer.setStudioInteractionState?.({
-            enabled: rendererPrototypeEnabled,
-            fillTexture: reactionAsset.fillCanvas,
-            contourTexture: reactionAsset.contourCanvas,
-            binding: element.shaderBinding,
-            interactionMix: element.shaderBinding.interactionMix,
-            reactionMode: element.shaderBinding.reactionMode,
-          });
-          await renderer.render({
-            timestamp,
-            audioFrame: this.audioFrame,
-            interactionSummary: surfaceInteractionSources,
-          });
-          const surfaceLayer = createSizedCanvas(width, height);
-          const surfaceLayerContext = surfaceLayer.getContext("2d");
-          drawWithinSurfaceMinusClipGeometries({
-            context: surfaceLayerContext,
-            surfaceGeometry: element.geometry,
-            clipGeometries: surfaceClipGeometries,
-            width,
-            height,
-            draw: () =>
-              drawSurfaceCanvas(
-                surfaceLayerContext,
-                renderer.getCanvas(),
-                element.geometry,
-                element.shaderBinding,
-                width,
-                height
-              ),
-          });
-
-          if (!rendererPrototypeEnabled) {
-            drawWithinSurfaceMinusClipGeometries({
-              context: surfaceLayerContext,
-              surfaceGeometry: element.geometry,
-              clipGeometries: surfaceClipGeometries,
-              width,
-              height,
-              draw: () =>
-                drawSurfaceReactionPrototype({
-                  context: surfaceLayerContext,
-                  geometry: element.geometry,
-                  fillCanvas: reactionAsset.fillCanvas,
-                  contourCanvas: reactionAsset.contourCanvas,
-                  visibilityCanvas: reactionAsset.visibilityCanvas,
-                  binding: element.shaderBinding,
-                  outputWidth: width,
-                  outputHeight: height,
-                }),
-            });
-          }
-          subtractClipGeometriesFromLayer({
-            context: surfaceLayerContext,
-            clipGeometries: surfaceClipGeometries,
-            width,
-            height,
-          });
-          this.context.save();
-          this.context.globalCompositeOperation = mapBlendMode(element.shaderBinding.blendMode);
-          this.context.globalAlpha = element.shaderBinding.opacity;
-          this.context.drawImage(surfaceLayer, 0, 0, width, height);
-          this.context.restore();
+        const sourceCanvas = cutterShaderCanvases.get(element.id);
+        if (!sourceCanvas) {
+          continue;
         }
-      }
 
-      if (element.roles.clip) {
-        fillGeometry(
-          this.context,
-          element,
+        const shaderLayer = createSizedCanvas(width, height);
+        const shaderContext = shaderLayer.getContext("2d");
+        const visibleLoops = drawShaderSurfaceWithPrecut({
+          context: shaderContext,
+          sourceCanvas,
+          targetGeometry: element.geometry,
+          binding: element.shaderBinding,
+          cutState,
+          cutterShaderCanvases,
           width,
           height,
-          "#000000",
-          1,
-          "destination-out"
-        );
+        });
+
+        const bounds = getPolygonBounds(element.geometry.points);
+        this.lastVisibleSurfaceGeometries.push({
+          elementId: element.id,
+          elementName: element.name,
+          sourceGeometry: element.geometry,
+          clipGeometries: cuttersAbove.filter((cutter) => cutter.clipRole).map((cutter) => cutter.geometry),
+          visibleGeometries: visibleLoops.map((loop) => ({ kind: "polygon", points: loop })),
+          visibilityMode: "sequential-cutters-v3",
+          drawWidth: Math.max(1, Math.round((bounds.maxX - bounds.minX) * width)),
+          drawHeight: Math.max(1, Math.round((bounds.maxY - bounds.minY) * height)),
+        });
+
+        this.context.save();
+        this.context.globalCompositeOperation = mapBlendMode(element.shaderBinding.blendMode);
+        this.context.globalAlpha = element.shaderBinding.opacity;
+        this.context.drawImage(shaderLayer, 0, 0, width, height);
+        this.context.restore();
       }
     }
-    applyFinalClipFill(
-      this.context,
-      clipElements,
-      width,
-      height,
-      this.project.output.background ?? "#000000"
-    );
   }
 }
