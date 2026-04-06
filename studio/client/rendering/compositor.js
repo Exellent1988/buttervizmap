@@ -882,7 +882,7 @@ export class StudioCompositor {
   }
 
   async ensureRendererGraph() {
-    if (!this.project || !this._rendererGraphDirty) {
+    if (!this.project) {
       return;
     }
     this._rendererGraphDirty = false;

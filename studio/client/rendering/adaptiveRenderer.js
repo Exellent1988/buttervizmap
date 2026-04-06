@@ -292,37 +292,44 @@ export class AdaptiveRenderer {
       return;
     }
 
-    this.runtime.visualizer.setStudioInteractionState?.(this.studioInteractionState);
+    try {
+      this.runtime.visualizer.setStudioInteractionState?.(this.studioInteractionState);
 
-    const { fillTexture, contourTexture } = this.studioInteractionState;
-    if (
-      fillTexture &&
-      contourTexture &&
-      (fillTexture !== this._lastFillTexture || contourTexture !== this._lastContourTexture)
-    ) {
-      this.runtime.visualizer.loadExtraImages({
-        studio_interaction_fill: {
-          data: fillTexture,
-          width: fillTexture.width,
-          height: fillTexture.height,
-          repeat: false,
-        },
-        studio_interaction_contour: {
-          data: contourTexture,
-          width: contourTexture.width,
-          height: contourTexture.height,
-          repeat: false,
-        },
+      const { fillTexture, contourTexture } = this.studioInteractionState;
+      if (
+        fillTexture &&
+        contourTexture &&
+        (fillTexture !== this._lastFillTexture || contourTexture !== this._lastContourTexture)
+      ) {
+        this.runtime.visualizer.loadExtraImages({
+          studio_interaction_fill: {
+            data: fillTexture,
+            width: fillTexture.width,
+            height: fillTexture.height,
+            repeat: false,
+          },
+          studio_interaction_contour: {
+            data: contourTexture,
+            width: contourTexture.width,
+            height: contourTexture.height,
+            repeat: false,
+          },
+        });
+        this._lastFillTexture = fillTexture;
+        this._lastContourTexture = contourTexture;
+      }
+
+      this.runtime.visualizer.render({
+        audioLevels: audioFrame ?? SILENT_AUDIO_FRAME,
+        elapsedTime: timestamp * 0.001,
       });
-      this._lastFillTexture = fillTexture;
-      this._lastContourTexture = contourTexture;
+      this.hasRenderedCurrentPreset = true;
+    } catch (error) {
+      this.lastError = error instanceof Error ? error.message : String(error);
+      this.runtimeMode = "error";
+      console.error("[Butterchurn] render error – falling back to mock", error);
+      this.mockRenderer.render({ timestamp, audioFrame, interactionSummary });
     }
-
-    this.runtime.visualizer.render({
-      audioLevels: audioFrame ?? SILENT_AUDIO_FRAME,
-      elapsedTime: timestamp * 0.001,
-    });
-    this.hasRenderedCurrentPreset = true;
   }
 
   getCanvas() {
