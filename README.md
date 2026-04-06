@@ -61,9 +61,9 @@ Admin route (`/admin`) on desktop:
 
 ![VizMap Studio Admin Desktop](docs/screenshots/ui-admin-desktop.png)
 
-Output route (`/output/:sessionId`) on desktop:
+Preview canvas detail from the admin route:
 
-![VizMap Studio Output Desktop](docs/screenshots/ui-output-desktop.png)
+![VizMap Studio Preview Canvas](docs/screenshots/ui-preview-canvas.png)
 
 Admin route (`/admin`) mobile viewport:
 
