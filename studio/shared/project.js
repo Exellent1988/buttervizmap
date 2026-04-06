@@ -171,7 +171,7 @@ export function createDefaultProject() {
     output: {
       width: 1280,
       height: 720,
-      background: "#050816",
+      background: "#000000",
       rendering: {
         frameLimit: 45,
         canvasScale: 2,
@@ -419,7 +419,7 @@ export function normalizeProjectWithDiagnostics(project = {}, options = {}) {
     output: {
       width: clampNumber(project.output?.width, 1280, 320, 8192),
       height: clampNumber(project.output?.height, 720, 180, 8192),
-      background: project.output?.background ?? "#050816",
+      background: "#000000",
       rendering: {
         frameLimit: clampInteger(project.output?.rendering?.frameLimit, 45, 15, 120),
         canvasScale: clampNumber(project.output?.rendering?.canvasScale, 2, 0.5, 2),

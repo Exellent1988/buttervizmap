@@ -325,12 +325,20 @@ export class AdminApp {
 
     const nextPreset = this.pickNextGlobalPreset();
     if (nextPreset) {
+      this.pushRecentPreset(nextPreset.id);
       this.store.updateProject((project) => ({
         ...project,
         globalLayer: {
           ...project.globalLayer,
           presetId: nextPreset.id,
         },
+        elements: project.elements.map((element) => ({
+          ...element,
+          shaderBinding: {
+            ...element.shaderBinding,
+            presetId: nextPreset.id,
+          },
+        })),
         output: {
           ...project.output,
           presets: {
@@ -921,34 +929,12 @@ export class AdminApp {
       return;
     }
 
-    if (target.id === "global-solid-color") {
-      const selectedGlobalPreset = this.store.state.project.presetLibrary.presets.find(
-        (preset) => preset.id === this.store.state.project.globalLayer.presetId
-      );
-      if (!selectedGlobalPreset) {
-        return;
-      }
-      this.store.updatePreset(selectedGlobalPreset.id, (preset) => ({
-        ...preset,
-        overrides: {
-          ...preset.overrides,
-          baseColor: target.value,
-        },
-      }));
-      this.schedulePanelRefresh();
-      return;
-    }
-
-    if (["global-opacity", "global-scale"].includes(target.id)) {
-      const fieldMap = {
-        "global-opacity": "opacity",
-        "global-scale": "scale",
-      };
+    if (target.id === "global-opacity") {
       this.store.updateProject((project) => ({
         ...project,
         globalLayer: {
           ...project.globalLayer,
-          [fieldMap[target.id]]: Number(target.value),
+          opacity: Number(target.value),
         },
       }));
       return;
@@ -1126,25 +1112,6 @@ export class AdminApp {
       return;
     }
 
-    if (target.id === "global-preset") {
-      this.pushRecentPreset(target.value);
-      this.store.updateProject((project) => ({
-        ...project,
-        globalLayer: {
-          ...project.globalLayer,
-          presetId: target.value,
-        },
-        output: {
-          ...project.output,
-          presets: {
-            ...project.output.presets,
-            lastChangeMode: "user",
-          },
-        },
-      }));
-      return;
-    }
-
     if (target.id === "preset-cycle-enabled" || target.id === "preset-randomize-next") {
       const fieldMap = {
         "preset-cycle-enabled": "cycleEnabled",
@@ -1170,13 +1137,27 @@ export class AdminApp {
 
     if (target.id === "element-preset") {
       this.pushRecentPreset(target.value);
-      this.updateSelectedElement({
-        ...selectedElement,
-        shaderBinding: {
-          ...selectedElement.shaderBinding,
-          presetId: target.value,
+      this.store.updateProject((project) => ({
+        ...project,
+        elements: project.elements.map((element) =>
+          element.id === selectedElement.id
+            ? normalizeSceneElement({
+                ...element,
+                shaderBinding: {
+                  ...element.shaderBinding,
+                  presetId: target.value,
+                },
+              })
+            : element
+        ),
+        output: {
+          ...project.output,
+          presets: {
+            ...project.output.presets,
+            lastChangeMode: "user",
+          },
         },
-      });
+      }));
       return;
     }
 
@@ -1385,13 +1366,9 @@ export class AdminApp {
     this.compositor?.setProject(state.project);
 
     const selectedElement = this.getSelectedElement();
-    const selectedGlobalPreset = state.project.presetLibrary.presets.find(
-      (preset) => preset.id === state.project.globalLayer.presetId
-    );
     const visiblePresetEntries = this.getVisiblePresetEntries(
       state.project.presetLibrary.presets
     );
-    const selectableGlobalPresets = this.getSelectableGlobalPresets();
     const outputUrl = this.getOutputUrl();
     const lanHintUrl = this.getLanHintUrl();
     const debugState = this.compositor?.getDebugState?.() ?? {};
@@ -1419,27 +1396,8 @@ export class AdminApp {
           <span class="chip">${state.viewerCount} viewer(s)</span>
           <span class="chip">${state.project.presetLibrary.presets.length} presets available</span>
         </div>
-        <label ${makeTitle("Chooses the shader preset that renders behind all local element surfaces.")}>
-          Global preset
-          <select id="global-preset">
-            ${this.renderPresetOptions(
-              selectableGlobalPresets,
-              state.project.globalLayer.presetId
-            )}
-          </select>
-        </label>
-        ${
-          selectedGlobalPreset?.sourceType === "solid"
-            ? `
-              <label ${makeTitle("Used when the global preset is set to Solid Color. This is a flat background fill behind all elements.")}>
-                Solid color
-                <input id="global-solid-color" type="color" value="${escapeHtml(selectedGlobalPreset.overrides?.baseColor ?? "#101820")}" />
-              </label>
-            `
-            : ""
-        }
         <div class="field-grid compact">
-          <label ${makeTitle("Automatically advances the global preset after the configured interval.")}>
+          <label ${makeTitle("Automatically advances the shader preset across all shader-surface elements after the configured interval.")}>
             <span>Cycle presets</span>
             <input id="preset-cycle-enabled" type="checkbox" ${state.project.output.presets.cycleEnabled ? "checked" : ""} />
           </label>
@@ -1459,13 +1417,9 @@ export class AdminApp {
             Manual blend seconds
             <input id="preset-user-blend-seconds" type="number" min="0" max="20" step="0.1" value="${state.project.output.presets.userBlendSeconds}" />
           </label>
-          <label ${makeTitle("Overall opacity of the global shader layer before local surfaces and clip masks are applied.")}>
+          <label ${makeTitle("Master opacity multiplier applied to all rendered elements in the output.")}>
             Global opacity
             <input id="global-opacity" type="number" min="0" max="1" step="0.05" value="${state.project.globalLayer.opacity}" />
-          </label>
-          <label ${makeTitle("Scales the global Butterchurn layer before it is composited into the output.")}>
-            Global scale
-            <input id="global-scale" type="number" min="0.8" max="1.5" step="0.01" value="${state.project.globalLayer.scale}" />
           </label>
           <label ${makeTitle("Limits the admin and output render loops to a target frame rate.")}>
             Frame limit
@@ -1547,9 +1501,7 @@ export class AdminApp {
         </div>
       </div>
     `;
-    if (!this.shouldPreservePanel("#session-panel", "global-solid-color")) {
-      this.root.querySelector("#session-panel").innerHTML = sessionMarkup;
-    }
+    this.root.querySelector("#session-panel").innerHTML = sessionMarkup;
 
     this.root.querySelector("#element-list").innerHTML = `
       <div class="panel-header">
@@ -1672,7 +1624,6 @@ export class AdminApp {
     this.root.querySelector("#status-bar").innerHTML = `
       <span class="tag">Project <strong>${escapeHtml(state.project.meta.name)}</strong></span>
       <span class="tag">Canvas <strong>${state.project.output.width}×${state.project.output.height}</strong></span>
-      <span class="tag">Global renderer <strong>${escapeHtml(this.compositor?.globalRenderer?.getRuntimeMode?.() ?? "pending")}</strong></span>
       <span class="tag">Autosave <strong>${escapeHtml(state.autosaveStatus)}</strong></span>
       <span class="tag">Selected point <strong>${this.selectedPointIndex == null ? "none" : this.selectedPointIndex + 1}</strong></span>
     `;
@@ -1691,20 +1642,11 @@ export class AdminApp {
             <small>Error: ${escapeHtml(state.autosaveError ?? "none")}</small>
           </div>
           <div class="debug-card">
-            <strong>Global renderer</strong>
-            <small>Mode: ${escapeHtml(debugState.globalRenderer?.runtimeMode ?? "pending")}</small>
-            <small>Active preset: ${escapeHtml(debugState.globalRenderer?.activePresetName ?? "none")}</small>
-            <small>Requested preset: ${escapeHtml(debugState.globalRenderer?.requestedPresetName ?? "none")}</small>
-            <small>Fallback: ${escapeHtml(debugState.globalRenderer?.fallbackMode ?? "none")}</small>
-            <small>Error: ${escapeHtml(debugState.globalRenderer?.lastError ?? "none")}</small>
-            <small>Bundle: ${escapeHtml(debugState.globalRenderer?.bundlePath ?? "mock-only")}</small>
-          </div>
-          <div class="debug-card">
             <strong>Render config</strong>
             <small>Frame limit: ${state.project.output.rendering.frameLimit}</small>
             <small>Canvas scale: ${state.project.output.rendering.canvasScale}x</small>
             <small>Mesh: ${state.project.output.rendering.meshWidth} × ${state.project.output.rendering.meshHeight}</small>
-            <small>Global scale: ${state.project.globalLayer.scale.toFixed(2)}</small>
+            <small>Global opacity: ${state.project.globalLayer.opacity.toFixed(2)}</small>
             <small>Visible surfaces: ${escapeHtml(visibleSurfaceSummary)}</small>
           </div>
           <div class="debug-card">

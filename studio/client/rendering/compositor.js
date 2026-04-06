@@ -29,6 +29,7 @@ const NEUTRAL_BINDING = {
   offsetY: 0,
   rotation: 0,
 };
+const OUTPUT_BACKGROUND = "#000000";
 
 function createSizedCanvas(width, height) {
   const canvas = document.createElement("canvas");
@@ -756,39 +757,6 @@ function drawPaintLayerWithPrecut({
   });
 }
 
-function drawGlobalLayerWithPrecut({
-  context,
-  sourceCanvas,
-  binding,
-  cutState,
-  cutterShaderCanvases,
-  width,
-  height,
-}) {
-  const visibleLoops = mapLoopEntriesToLoops(cutState.visibleLoopEntries);
-  context.save();
-  appendLoopsPath(context, visibleLoops, width, height);
-  context.clip("evenodd");
-  drawCanvasWithBinding({
-    context,
-    sourceCanvas,
-    drawX: 0,
-    drawY: 0,
-    drawWidth: width,
-    drawHeight: height,
-    binding,
-  });
-  context.restore();
-  // Do not inject interaction fill onto the global full-canvas target,
-  // otherwise the cutter appears filled outside real local overlaps.
-  applyMaskCutters({
-    context,
-    maskCutters: cutState.maskCutters,
-    width,
-    height,
-  });
-}
-
 function drawShaderSurfaceLoops({
   context,
   sourceCanvas,
@@ -922,29 +890,6 @@ export class StudioCompositor {
       meshHeight: this.project.output.rendering.meshHeight,
     };
 
-    if (!this.globalRenderer) {
-      this.globalRenderer = new AdaptiveRenderer(width, height);
-    }
-    await this.globalRenderer.setRenderConfig(renderConfig);
-    await this.globalRenderer.resize(width, height);
-
-    const globalPreset = this.project.presetLibrary.presets.find(
-      (preset) => preset.id === this.project.globalLayer.presetId
-    );
-    if (globalPreset && this.loadedPresetIds.global !== globalPreset.id) {
-      const didLoad = await this.globalRenderer.loadPreset(
-        globalPreset,
-        this.loadedPresetIds.global == null
-          ? 0
-          : this.project.output.presets.lastChangeMode === "auto"
-            ? this.project.output.presets.autoBlendSeconds
-            : this.project.output.presets.userBlendSeconds
-      );
-      if (didLoad) {
-        this.loadedPresetIds.global = globalPreset.id;
-      }
-    }
-
     const activeShaderElements = this.project.elements.filter((element) =>
       elementNeedsShaderCanvas(element)
     );
@@ -959,11 +904,15 @@ export class StudioCompositor {
         (entry) => entry.id === element.shaderBinding.presetId
       );
       if (preset && this.loadedPresetIds.elements.get(element.id) !== preset.id) {
+        const blendSeconds =
+          this.loadedPresetIds.elements.has(element.id)
+            ? this.project.output.presets.lastChangeMode === "auto"
+              ? this.project.output.presets.autoBlendSeconds
+              : this.project.output.presets.userBlendSeconds
+            : 0;
         const didLoad = await renderer.loadPreset(
           preset,
-          this.loadedPresetIds.elements.has(element.id)
-            ? this.project.output.presets.userBlendSeconds
-            : 0
+          blendSeconds
         );
         if (didLoad) {
           this.loadedPresetIds.elements.set(element.id, preset.id);
@@ -1019,10 +968,11 @@ export class StudioCompositor {
 
     const width = this.project.output.width;
     const height = this.project.output.height;
+    const globalOpacity = Math.max(0, Math.min(1, this.project.globalLayer?.opacity ?? 1));
     this.lastVisibleSurfaceGeometries = [];
 
     this.context.clearRect(0, 0, width, height);
-    this.context.fillStyle = this.project.output.background;
+    this.context.fillStyle = OUTPUT_BACKGROUND;
     this.context.fillRect(0, 0, width, height);
 
     const orderedElements = [...this.project.elements]
@@ -1053,43 +1003,6 @@ export class StudioCompositor {
       cutterShaderCanvases.set(element.id, renderer.getCanvas());
     }
 
-    if (this.project.globalLayer.enabled && this.globalRenderer) {
-      await this.globalRenderer.render({
-        timestamp,
-        audioFrame: this.audioFrame,
-        interactionSummary: [],
-      });
-
-      const globalLayer = createSizedCanvas(width, height);
-      const globalLayerContext = globalLayer.getContext("2d");
-      const globalCutState = buildTargetCutStateForTarget({
-        targetGeometry: FULL_CANVAS_GEOMETRY,
-        cutters,
-      });
-      drawGlobalLayerWithPrecut({
-        context: globalLayerContext,
-        sourceCanvas: this.globalRenderer.getCanvas(),
-        binding: {
-          opacity: 1,
-          blendMode: "normal",
-          scale: this.project.globalLayer.scale,
-          offsetX: 0,
-          offsetY: 0,
-          rotation: 0,
-        },
-        cutState: globalCutState,
-        cutterShaderCanvases,
-        width,
-        height,
-      });
-
-      this.context.save();
-      this.context.globalAlpha = this.project.globalLayer.opacity;
-      this.context.globalCompositeOperation = "source-over";
-      this.context.drawImage(globalLayer, 0, 0, width, height);
-      this.context.restore();
-    }
-
     for (let targetIndex = 0; targetIndex < orderedElements.length; targetIndex += 1) {
       const element = orderedElements[targetIndex];
       const elementCutterType = getElementCutterType(element);
@@ -1104,7 +1017,10 @@ export class StudioCompositor {
         const paintContext = paintLayer.getContext("2d");
         drawPaintLayerWithPrecut({
           context: paintContext,
-          targetStyle: element.style,
+          targetStyle: {
+            ...element.style,
+            opacity: element.style.opacity * globalOpacity,
+          },
           cutState,
           cutterShaderCanvases,
           width,
@@ -1150,7 +1066,7 @@ export class StudioCompositor {
 
         this.context.save();
         this.context.globalCompositeOperation = mapBlendMode(element.shaderBinding.blendMode);
-        this.context.globalAlpha = element.shaderBinding.opacity;
+        this.context.globalAlpha = element.shaderBinding.opacity * globalOpacity;
         this.context.drawImage(shaderLayer, 0, 0, width, height);
         this.context.restore();
         if (fillLayer) {
