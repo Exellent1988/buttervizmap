@@ -6,6 +6,7 @@ class TestServer {
   constructor() {
     this.server = null;
     this.port = null;
+    this.host = '127.0.0.1';
   }
 
   async start() {
@@ -46,8 +47,10 @@ class TestServer {
       });
     });
 
-    return new Promise((resolve) => {
-      this.server.listen(0, 'localhost', () => {
+    return new Promise((resolve, reject) => {
+      this.server.once('error', reject);
+      this.server.listen(0, this.host, () => {
+        this.server.removeListener('error', reject);
         this.port = this.server.address().port;
         resolve(this.port);
       });
@@ -63,7 +66,7 @@ class TestServer {
   }
 
   getUrl() {
-    return `http://localhost:${this.port}`;
+    return `http://${this.host}:${this.port}`;
   }
 }
 

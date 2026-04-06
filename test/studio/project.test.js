@@ -7,20 +7,23 @@ import {
   parseProjectBundle,
   parseProject,
   serializeProject,
+  normalizeSceneElement,
 } from "../../studio/shared/project.js";
 
 describe("studio project model", () => {
   test("creates a default project with roles, presets and scenes", () => {
     const project = createDefaultProject();
 
-    expect(project.version).toBe(2);
+    expect(project.version).toBe(3);
     expect(project.elements.length).toBeGreaterThanOrEqual(3);
     expect(project.presetLibrary.presets.length).toBeGreaterThanOrEqual(6);
     expect(project.scenes.length).toBeGreaterThanOrEqual(2);
     expect(project.elements[0].roles.shaderSurface).toBe(true);
     expect(project.elements[0].shaderBinding.blendMode).toBe("screen");
-    expect(project.elements[0].interaction.influence).toBeGreaterThan(0);
-    expect(project.globalLayer.interactionMix).toBeGreaterThan(0);
+    expect(project.elements[0].style.feather).toBeUndefined();
+    expect(project.elements[0].shaderBinding.reactionMode).toBeUndefined();
+    expect(project.elements[0].shaderBinding.interactionMix).toBeUndefined();
+    expect(project.globalLayer.interactionMix).toBeUndefined();
     expect(project.output.rendering.frameLimit).toBe(45);
     expect(project.output.rendering.meshWidth).toBe(48);
     expect(project.output.presets.userBlendSeconds).toBeCloseTo(5.7);
@@ -28,7 +31,7 @@ describe("studio project model", () => {
       project.presetLibrary.presets.find((preset) => preset.id === "solid-color")?.meta
         ?.category
     ).toBe("special");
-    expect(project.version).toBe(2);
+    expect(project.version).toBe(3);
   });
 
   test("serializes and parses project files without losing the scene structure", () => {
@@ -112,7 +115,7 @@ describe("studio project model", () => {
       { source: "test-import" }
     );
 
-    expect(bundle.project.version).toBe(2);
+    expect(bundle.project.version).toBe(3);
     expect(bundle.project.output.rendering.frameLimit).toBe(45);
     expect(bundle.project.output.presets.userBlendSeconds).toBeCloseTo(5.7);
     expect(bundle.project.presetLibrary.presets.find((preset) => preset.id === "solid-color")).toBeTruthy();
@@ -122,18 +125,50 @@ describe("studio project model", () => {
     );
   });
 
-  test("normalizes reflect as a supported reaction mode", () => {
+  test("drops legacy interaction fields from imported elements", () => {
     const bundle = parseProjectBundle({
       elements: [
         {
           geometry: { kind: "quad" },
+          style: {
+            feather: 0.4,
+          },
           shaderBinding: {
+            interactionMix: 0.7,
             reactionMode: "reflect",
+          },
+          interaction: {
+            alpha: 0.1,
+            influence: 0.1,
           },
         },
       ],
+      globalLayer: {
+        interactionMix: 0.8,
+        drift: 0.2,
+      },
+      output: {
+        rendering: {
+          interactionEngine: "renderer",
+        },
+      },
     });
 
-    expect(bundle.project.elements[0].shaderBinding.reactionMode).toBe("reflect");
+    expect(bundle.project.elements[0].style.feather).toBeUndefined();
+    expect(bundle.project.elements[0].shaderBinding.interactionMix).toBeUndefined();
+    expect(bundle.project.elements[0].shaderBinding.reactionMode).toBeUndefined();
+    expect(bundle.project.elements[0].interaction).toBeUndefined();
+    expect(bundle.project.elements[0].roles.interactionField).toBe(false);
+    expect(bundle.project.globalLayer.interactionMix).toBeUndefined();
+    expect(bundle.project.globalLayer.drift).toBeUndefined();
+    expect(bundle.project.output.rendering.interactionEngine).toBeUndefined();
+  });
+
+  test("defaults interactionField to false when roles are omitted", () => {
+    const element = normalizeSceneElement({
+      geometry: { kind: "quad" },
+    });
+
+    expect(element.roles.interactionField).toBe(false);
   });
 });

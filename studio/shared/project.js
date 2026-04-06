@@ -1,9 +1,8 @@
 import { createBuiltinLibraryEntries } from "./defaultPresets.js";
 import { normalizeGeometry } from "./geometry.js";
 
-const STORAGE_VERSION = 2;
+const STORAGE_VERSION = 3;
 const BLEND_MODES = new Set(["normal", "screen", "add", "multiply", "overlay"]);
-const REACTION_MODES = new Set(["tint", "pulse", "warp", "glow", "reflect"]);
 const BUILTIN_LIBRARY_ENTRIES = createBuiltinLibraryEntries();
 
 function createId(prefix) {
@@ -25,7 +24,6 @@ export function createSceneElement(partial = {}) {
     roles: partial.roles,
     style: partial.style,
     shaderBinding: partial.shaderBinding,
-    interaction: partial.interaction,
   });
 }
 
@@ -41,12 +39,11 @@ export function normalizeSceneElement(element = {}) {
       clip: element.roles?.clip === true,
       paint: element.roles?.paint === true,
       shaderSurface: element.roles?.shaderSurface === true,
-      interactionField: element.roles?.interactionField !== false,
+      interactionField: element.roles?.interactionField === true,
     },
     style: {
       color: element.style?.color ?? "#58d1c9",
       opacity: clampNumber(element.style?.opacity, 0.7, 0, 1),
-      feather: clampNumber(element.style?.feather, 0.08, 0, 1),
     },
     shaderBinding: {
       presetId: element.shaderBinding?.presetId ?? "aurora-grid",
@@ -57,21 +54,6 @@ export function normalizeSceneElement(element = {}) {
       offsetX: clampNumber(element.shaderBinding?.offsetX, 0, -1, 1),
       offsetY: clampNumber(element.shaderBinding?.offsetY, 0, -1, 1),
       rotation: clampNumber(element.shaderBinding?.rotation, 0, -180, 180),
-      interactionMix: clampNumber(element.shaderBinding?.interactionMix, 0.65, 0, 1),
-      reactionMode: normalizeEnum(
-        element.shaderBinding?.reactionMode,
-        REACTION_MODES,
-        "tint"
-      ),
-    },
-    interaction: {
-      alpha: clampNumber(element.interaction?.alpha, 0.65, 0, 1),
-      color: element.interaction?.color ?? element.style?.color ?? "#58d1c9",
-      distance: clampNumber(element.interaction?.distance, 0.5, 0, 1),
-      enabled: element.interaction?.enabled !== false,
-      pulse: clampNumber(element.interaction?.pulse, 0.55, 0, 1),
-      swirl: clampNumber(element.interaction?.swirl, 0.35, 0, 1),
-      influence: clampNumber(element.interaction?.influence, 0.7, 0, 1),
     },
   };
 }
@@ -125,7 +107,6 @@ export function createDefaultProject() {
       style: {
         color: "#4ad1d1",
         opacity: 0.72,
-        feather: 0.05,
       },
       shaderBinding: {
         presetId: "nebula-pulse",
@@ -153,13 +134,6 @@ export function createDefaultProject() {
       style: {
         color: "#ff7d45",
         opacity: 0.45,
-        feather: 0.16,
-      },
-      interaction: {
-        alpha: 0.6,
-        color: "#ff7d45",
-        distance: 0.75,
-        enabled: true,
       },
     }),
     createSceneElement({
@@ -182,7 +156,6 @@ export function createDefaultProject() {
       style: {
         color: "#ffffff",
         opacity: 1,
-        feather: 0.04,
       },
     }),
   ];
@@ -198,7 +171,7 @@ export function createDefaultProject() {
     output: {
       width: 1280,
       height: 720,
-      background: "#050816",
+      background: "#000000",
       rendering: {
         frameLimit: 45,
         canvasScale: 2,
@@ -218,8 +191,6 @@ export function createDefaultProject() {
       enabled: true,
       presetId: "aurora-grid",
       opacity: 1,
-      interactionMix: 0.5,
-      drift: 0.08,
       scale: 1,
     },
     presetLibrary: {
@@ -280,7 +251,6 @@ export function captureScene(project, name = "Scene") {
         roles: { ...element.roles },
         style: { ...element.style },
         shaderBinding: { ...element.shaderBinding },
-        interaction: { ...element.interaction },
       })),
     },
   };
@@ -329,10 +299,6 @@ export function applySceneToProject(project, sceneId) {
       shaderBinding: {
         ...element.shaderBinding,
         ...elementStateById.get(element.id)?.shaderBinding,
-      },
-      interaction: {
-        ...element.interaction,
-        ...elementStateById.get(element.id)?.interaction,
       },
     })),
   });
@@ -453,7 +419,7 @@ export function normalizeProjectWithDiagnostics(project = {}, options = {}) {
     output: {
       width: clampNumber(project.output?.width, 1280, 320, 8192),
       height: clampNumber(project.output?.height, 720, 180, 8192),
-      background: project.output?.background ?? "#050816",
+      background: "#000000",
       rendering: {
         frameLimit: clampInteger(project.output?.rendering?.frameLimit, 45, 15, 120),
         canvasScale: clampNumber(project.output?.rendering?.canvasScale, 2, 0.5, 2),
@@ -483,8 +449,6 @@ export function normalizeProjectWithDiagnostics(project = {}, options = {}) {
       enabled: project.globalLayer?.enabled !== false,
       presetId: project.globalLayer?.presetId ?? "aurora-grid",
       opacity: clampNumber(project.globalLayer?.opacity, 1, 0, 1),
-      interactionMix: clampNumber(project.globalLayer?.interactionMix, 0.5, 0, 1),
-      drift: clampNumber(project.globalLayer?.drift, 0.08, 0, 0.4),
       scale: clampNumber(project.globalLayer?.scale, 1, 0.8, 1.5),
     },
     presetLibrary: {
@@ -513,7 +477,6 @@ export function normalizeProjectWithDiagnostics(project = {}, options = {}) {
                   roles: { ...element.roles },
                   style: { ...element.style },
                   shaderBinding: { ...element.shaderBinding },
-                  interaction: { ...element.interaction },
                 }))
               : [],
           },

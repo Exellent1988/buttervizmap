@@ -9,6 +9,13 @@ const SILENT_AUDIO_FRAME = {
   timeByteArrayL: new Uint8Array(1024).fill(128),
   timeByteArrayR: new Uint8Array(1024).fill(128),
 };
+const REACTION_MODE_IDS = {
+  tint: 0,
+  pulse: 1,
+  warp: 2,
+  glow: 3,
+  reflect: 4,
+};
 
 async function loadButterchurnModule() {
   if (!butterchurnPromise) {
@@ -84,6 +91,14 @@ export class AdaptiveRenderer {
     this.lastRequestedPreset = null;
     this.lastFailedPresetId = null;
     this.hasRenderedCurrentPreset = false;
+    this.studioInteractionState = {
+      enabled: false,
+      fillTexture: null,
+      contourTexture: null,
+      binding: null,
+      interactionMix: 0,
+      reactionModeId: REACTION_MODE_IDS.tint,
+    };
   }
 
   applyRendererSize() {
@@ -103,23 +118,33 @@ export class AdaptiveRenderer {
 
     const butterchurnBundle = await loadButterchurnModule();
     if (butterchurnBundle?.module?.default?.createVisualizer) {
-      const outputCanvas = document.createElement("canvas");
-      outputCanvas.width = this.width;
-      outputCanvas.height = this.height;
-      this.bundlePath = butterchurnBundle.bundlePath;
-      this.runtime = {
-        type: "butterchurn",
-        canvas: outputCanvas,
-        visualizer: butterchurnBundle.module.default.createVisualizer(null, outputCanvas, {
-          width: this.width,
-          height: this.height,
-          pixelRatio: 1,
-          textureRatio: this.renderConfig.canvasScale,
-          meshWidth: this.renderConfig.meshWidth,
-          meshHeight: this.renderConfig.meshHeight,
-        }),
-      };
-      this.runtimeMode = "butterchurn";
+      try {
+        const outputCanvas = document.createElement("canvas");
+        outputCanvas.width = this.width;
+        outputCanvas.height = this.height;
+        this.bundlePath = butterchurnBundle.bundlePath;
+        this.runtime = {
+          type: "butterchurn",
+          canvas: outputCanvas,
+          visualizer: butterchurnBundle.module.default.createVisualizer(null, outputCanvas, {
+            width: this.width,
+            height: this.height,
+            pixelRatio: 1,
+            textureRatio: this.renderConfig.canvasScale,
+            meshWidth: this.renderConfig.meshWidth,
+            meshHeight: this.renderConfig.meshHeight,
+          }),
+        };
+        this.runtime.visualizer.setStudioInteractionState?.(this.studioInteractionState);
+        this.runtimeMode = "butterchurn";
+      } catch (error) {
+        this.runtime = null;
+        this.runtimeMode = "mock";
+        this.lastError =
+          error instanceof Error
+            ? `Butterchurn initialization failed: ${error.message}`
+            : `Butterchurn initialization failed: ${String(error)}`;
+      }
     } else {
       this.runtimeMode = "mock";
       this.lastError = "Butterchurn bundle could not be loaded. Falling back to mock renderer.";
@@ -233,9 +258,42 @@ export class AdaptiveRenderer {
     return false;
   }
 
+  setStudioInteractionState(state = {}) {
+    this.studioInteractionState = {
+      enabled: state.enabled === true,
+      fillTexture: state.fillTexture ?? null,
+      contourTexture: state.contourTexture ?? null,
+      binding: state.binding ?? null,
+      interactionMix: Number(state.interactionMix ?? 0),
+      reactionModeId:
+        REACTION_MODE_IDS[state.reactionMode] ?? REACTION_MODE_IDS.tint,
+    };
+
+    if (this.runtime?.type === "butterchurn") {
+      this.runtime.visualizer.setStudioInteractionState?.(this.studioInteractionState);
+    }
+  }
+
   async render({ timestamp, audioFrame, interactionSummary }) {
     this.mockRenderer.render({ timestamp, audioFrame, interactionSummary });
     if (this.runtime?.type === "butterchurn" && this.currentPreset && !this.forceMock) {
+      this.runtime.visualizer.setStudioInteractionState?.(this.studioInteractionState);
+      if (this.studioInteractionState.fillTexture && this.studioInteractionState.contourTexture) {
+        this.runtime.visualizer.loadExtraImages({
+          studio_interaction_fill: {
+            data: this.studioInteractionState.fillTexture,
+            width: this.studioInteractionState.fillTexture.width,
+            height: this.studioInteractionState.fillTexture.height,
+            repeat: false,
+          },
+          studio_interaction_contour: {
+            data: this.studioInteractionState.contourTexture,
+            width: this.studioInteractionState.contourTexture.width,
+            height: this.studioInteractionState.contourTexture.height,
+            repeat: false,
+          },
+        });
+      }
       this.runtime.visualizer.render({
         audioLevels: audioFrame ?? SILENT_AUDIO_FRAME,
         elapsedTime: timestamp * 0.001,

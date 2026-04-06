@@ -752,6 +752,10 @@ export default class Visualizer {
     this.renderer.loadExtraImages(imageData);
   }
 
+  setStudioInteractionState(state) {
+    this.renderer.setStudioInteractionState(state);
+  }
+
   setRendererSize(width, height, opts = {}) {
     this.internalCanvas.width = width;
     this.internalCanvas.height = height;

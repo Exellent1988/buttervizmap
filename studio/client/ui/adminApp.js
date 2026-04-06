@@ -4,9 +4,7 @@ import {
 } from "../../shared/project.js";
 import { buildInteractionSummary } from "../../shared/composition.js";
 import {
-  getMaxDistanceFromCentroid,
   getPolygonBounds,
-  getPolygonCentroid,
   pointInPolygon,
 } from "../../shared/geometry.js";
 import { DemoAudioSource, MicrophoneAudioSource } from "../audio/frameSource.js";
@@ -94,7 +92,6 @@ export class AdminApp {
           <section id="session-panel"></section>
           <section id="element-list"></section>
           <section id="scene-list"></section>
-          <section id="preset-list"></section>
           <section id="debug-panel"></section>
         </div>
       </aside>
@@ -328,12 +325,20 @@ export class AdminApp {
 
     const nextPreset = this.pickNextGlobalPreset();
     if (nextPreset) {
+      this.pushRecentPreset(nextPreset.id);
       this.store.updateProject((project) => ({
         ...project,
         globalLayer: {
           ...project.globalLayer,
           presetId: nextPreset.id,
         },
+        elements: project.elements.map((element) => ({
+          ...element,
+          shaderBinding: {
+            ...element.shaderBinding,
+            presetId: nextPreset.id,
+          },
+        })),
         output: {
           ...project.output,
           presets: {
@@ -589,6 +594,11 @@ export class AdminApp {
     }
 
     this.overlayContext.clearRect(0, 0, width, height);
+    const compositorDebugState = this.compositor?.getDebugState?.() ?? {};
+    const visibleSurfaceDebugEntries = compositorDebugState.visibleSurfaceGeometries ?? [];
+    const visibleSurfaceDebugByElement = new Map(
+      visibleSurfaceDebugEntries.map((entry) => [entry.elementId, entry])
+    );
     state.project.elements.forEach((element) => {
       const selected = element.id === state.selectedElementId;
       const hovered = element.id === this.hoverElementId;
@@ -648,27 +658,41 @@ export class AdminApp {
 
     if (["interaction", "all"].includes(this.debugOverlayMode)) {
       buildInteractionSummary(state.project).forEach((field) => {
-        const centroid = getPolygonCentroid(field.geometry.points);
-        const radius = getMaxDistanceFromCentroid(field.geometry.points) * Math.min(width, height);
+        const labelByType = {
+          maskCutter: "mask",
+          booleanCutterNoFill: "bool cut",
+          booleanCutterWithFill: field.hasShaderFill ? "bool+shader" : "bool",
+        };
+        const strokeByType = {
+          maskCutter: "rgba(255, 225, 123, 0.9)",
+          booleanCutterNoFill: "rgba(255, 132, 80, 0.92)",
+          booleanCutterWithFill: "rgba(95, 208, 200, 0.92)",
+        };
+        const firstPoint = field.geometry.points[0];
 
         this.overlayContext.save();
-        this.overlayContext.strokeStyle = "rgba(255, 225, 123, 0.85)";
-        this.overlayContext.setLineDash([6, 6]);
-        this.overlayContext.lineWidth = 1.5;
         this.overlayContext.beginPath();
-        this.overlayContext.arc(centroid.x * width, centroid.y * height, Math.max(12, radius), 0, Math.PI * 2);
+        field.geometry.points.forEach((point, index) => {
+          const x = point.x * width;
+          const y = point.y * height;
+          if (index === 0) {
+            this.overlayContext.moveTo(x, y);
+          } else {
+            this.overlayContext.lineTo(x, y);
+          }
+        });
+        this.overlayContext.closePath();
+        this.overlayContext.strokeStyle = strokeByType[field.cutterType] ?? "rgba(255, 225, 123, 0.85)";
+        this.overlayContext.setLineDash([6, 5]);
+        this.overlayContext.lineWidth = 1.5;
         this.overlayContext.stroke();
         this.overlayContext.setLineDash([]);
-        this.overlayContext.fillStyle = "rgba(255, 225, 123, 0.9)";
-        this.overlayContext.beginPath();
-        this.overlayContext.arc(centroid.x * width, centroid.y * height, 4, 0, Math.PI * 2);
-        this.overlayContext.fill();
         this.overlayContext.fillStyle = "#ffe17b";
         this.overlayContext.font = "11px IBM Plex Mono";
         this.overlayContext.fillText(
-          `a ${field.alpha.toFixed(2)} · d ${field.distance.toFixed(2)} · i ${field.influence.toFixed(2)}`,
-          centroid.x * width + 10,
-          centroid.y * height + 16
+          labelByType[field.cutterType] ?? field.cutterType,
+          firstPoint.x * width + 8,
+          firstPoint.y * height + 14
         );
         this.overlayContext.restore();
       });
@@ -683,11 +707,12 @@ export class AdminApp {
       .forEach((element) => {
         const bounds = getPolygonBounds(element.geometry.points);
         const selected = element.id === state.selectedElementId;
+        const visibleSurfaceDebug = visibleSurfaceDebugByElement.get(element.id);
 
         this.overlayContext.save();
         this.overlayContext.strokeStyle = selected
-          ? "rgba(255, 142, 80, 0.9)"
-          : "rgba(95, 208, 200, 0.75)";
+          ? "rgba(255, 142, 80, 0.45)"
+          : "rgba(95, 208, 200, 0.35)";
         this.overlayContext.setLineDash([10, 6]);
         this.overlayContext.lineWidth = 1.5;
         this.overlayContext.strokeRect(
@@ -705,6 +730,62 @@ export class AdminApp {
           bounds.minY * height + 14
         );
         this.overlayContext.restore();
+
+        visibleSurfaceDebug?.clipGeometries?.forEach((clipGeometry, clipIndex) => {
+          this.overlayContext.save();
+          this.overlayContext.beginPath();
+          clipGeometry.points.forEach((point, index) => {
+            const x = point.x * width;
+            const y = point.y * height;
+            if (index === 0) {
+              this.overlayContext.moveTo(x, y);
+            } else {
+              this.overlayContext.lineTo(x, y);
+            }
+          });
+          this.overlayContext.closePath();
+          this.overlayContext.strokeStyle = "rgba(255, 110, 110, 0.8)";
+          this.overlayContext.setLineDash([5, 4]);
+          this.overlayContext.lineWidth = 1.5;
+          this.overlayContext.stroke();
+          this.overlayContext.setLineDash([]);
+          this.overlayContext.fillStyle = "rgba(255, 140, 140, 0.95)";
+          this.overlayContext.font = "11px IBM Plex Mono";
+          this.overlayContext.fillText(
+            `clip ${clipIndex + 1}`,
+            clipGeometry.points[0].x * width + 8,
+            clipGeometry.points[0].y * height + 14
+          );
+          this.overlayContext.restore();
+        });
+
+        visibleSurfaceDebug?.visibleGeometries?.forEach((geometry, visibleIndex) => {
+          this.overlayContext.save();
+          this.overlayContext.beginPath();
+          geometry.points.forEach((point, index) => {
+            const x = point.x * width;
+            const y = point.y * height;
+            if (index === 0) {
+              this.overlayContext.moveTo(x, y);
+            } else {
+              this.overlayContext.lineTo(x, y);
+            }
+          });
+          this.overlayContext.closePath();
+          this.overlayContext.strokeStyle = selected
+            ? "rgba(255, 142, 80, 0.95)"
+            : "rgba(95, 208, 200, 0.95)";
+          this.overlayContext.lineWidth = 2.5;
+          this.overlayContext.stroke();
+          this.overlayContext.fillStyle = selected ? "#ffb084" : "#8ce8e1";
+          this.overlayContext.font = "11px IBM Plex Mono";
+          this.overlayContext.fillText(
+            `visible ${visibleIndex + 1}`,
+            geometry.points[0].x * width + 8,
+            geometry.points[0].y * height - 8
+          );
+          this.overlayContext.restore();
+        });
       });
   }
 
@@ -848,40 +929,12 @@ export class AdminApp {
       return;
     }
 
-    if (target.id === "global-solid-color") {
-      const selectedGlobalPreset = this.store.state.project.presetLibrary.presets.find(
-        (preset) => preset.id === this.store.state.project.globalLayer.presetId
-      );
-      if (!selectedGlobalPreset) {
-        return;
-      }
-      this.store.updatePreset(selectedGlobalPreset.id, (preset) => ({
-        ...preset,
-        overrides: {
-          ...preset.overrides,
-          baseColor: target.value,
-        },
-      }));
-      this.schedulePanelRefresh();
-      return;
-    }
-
-    if (
-      ["global-opacity", "global-interaction-mix", "global-drift", "global-scale"].includes(
-        target.id
-      )
-    ) {
-      const fieldMap = {
-        "global-opacity": "opacity",
-        "global-interaction-mix": "interactionMix",
-        "global-drift": "drift",
-        "global-scale": "scale",
-      };
+    if (target.id === "global-opacity") {
       this.store.updateProject((project) => ({
         ...project,
         globalLayer: {
           ...project.globalLayer,
-          [fieldMap[target.id]]: Number(target.value),
+          opacity: Number(target.value),
         },
       }));
       return;
@@ -913,9 +966,12 @@ export class AdminApp {
     }
 
     if (
-      ["render-frame-limit", "render-canvas-scale", "render-mesh-width", "render-mesh-height"].includes(
-        target.id
-      )
+      [
+        "render-frame-limit",
+        "render-canvas-scale",
+        "render-mesh-width",
+        "render-mesh-height",
+      ].includes(target.id)
     ) {
       const fieldMap = {
         "render-frame-limit": "frameLimit",
@@ -964,10 +1020,6 @@ export class AdminApp {
           ...selectedElement.style,
           color: target.value,
         },
-        interaction: {
-          ...selectedElement.interaction,
-          color: target.value,
-        },
       });
       this.schedulePanelRefresh();
       return;
@@ -984,26 +1036,10 @@ export class AdminApp {
       return;
     }
 
-    if (target.id === "element-feather") {
-      this.updateSelectedElement({
-        ...selectedElement,
-        style: {
-          ...selectedElement.style,
-          feather: Number(target.value),
-        },
-      });
-      return;
-    }
-
     if (
-      [
-        "shader-opacity",
-        "shader-scale",
-        "shader-offset-x",
-        "shader-offset-y",
-        "shader-rotation",
-        "shader-interaction-mix",
-      ].includes(target.id)
+      ["shader-opacity", "shader-scale", "shader-offset-x", "shader-offset-y", "shader-rotation"].includes(
+        target.id
+      )
     ) {
       const fieldMap = {
         "shader-opacity": "opacity",
@@ -1011,38 +1047,11 @@ export class AdminApp {
         "shader-offset-x": "offsetX",
         "shader-offset-y": "offsetY",
         "shader-rotation": "rotation",
-        "shader-interaction-mix": "interactionMix",
       };
       this.updateSelectedElement({
         ...selectedElement,
         shaderBinding: {
           ...selectedElement.shaderBinding,
-          [fieldMap[target.id]]: Number(target.value),
-        },
-      });
-      return;
-    }
-
-    if (
-      [
-        "interaction-alpha",
-        "interaction-distance",
-        "interaction-influence",
-        "interaction-pulse",
-        "interaction-swirl",
-      ].includes(target.id)
-    ) {
-      const fieldMap = {
-        "interaction-alpha": "alpha",
-        "interaction-distance": "distance",
-        "interaction-influence": "influence",
-        "interaction-pulse": "pulse",
-        "interaction-swirl": "swirl",
-      };
-      this.updateSelectedElement({
-        ...selectedElement,
-        interaction: {
-          ...selectedElement.interaction,
           [fieldMap[target.id]]: Number(target.value),
         },
       });
@@ -1103,25 +1112,6 @@ export class AdminApp {
       return;
     }
 
-    if (target.id === "global-preset") {
-      this.pushRecentPreset(target.value);
-      this.store.updateProject((project) => ({
-        ...project,
-        globalLayer: {
-          ...project.globalLayer,
-          presetId: target.value,
-        },
-        output: {
-          ...project.output,
-          presets: {
-            ...project.output.presets,
-            lastChangeMode: "user",
-          },
-        },
-      }));
-      return;
-    }
-
     if (target.id === "preset-cycle-enabled" || target.id === "preset-randomize-next") {
       const fieldMap = {
         "preset-cycle-enabled": "cycleEnabled",
@@ -1147,13 +1137,27 @@ export class AdminApp {
 
     if (target.id === "element-preset") {
       this.pushRecentPreset(target.value);
-      this.updateSelectedElement({
-        ...selectedElement,
-        shaderBinding: {
-          ...selectedElement.shaderBinding,
-          presetId: target.value,
+      this.store.updateProject((project) => ({
+        ...project,
+        elements: project.elements.map((element) =>
+          element.id === selectedElement.id
+            ? normalizeSceneElement({
+                ...element,
+                shaderBinding: {
+                  ...element.shaderBinding,
+                  presetId: target.value,
+                },
+              })
+            : element
+        ),
+        output: {
+          ...project.output,
+          presets: {
+            ...project.output.presets,
+            lastChangeMode: "user",
+          },
         },
-      });
+      }));
       return;
     }
 
@@ -1163,17 +1167,6 @@ export class AdminApp {
         shaderBinding: {
           ...selectedElement.shaderBinding,
           blendMode: target.value,
-        },
-      });
-      return;
-    }
-
-    if (target.id === "shader-reaction-mode") {
-      this.updateSelectedElement({
-        ...selectedElement,
-        shaderBinding: {
-          ...selectedElement.shaderBinding,
-          reactionMode: target.value,
         },
       });
       return;
@@ -1373,13 +1366,9 @@ export class AdminApp {
     this.compositor?.setProject(state.project);
 
     const selectedElement = this.getSelectedElement();
-    const selectedGlobalPreset = state.project.presetLibrary.presets.find(
-      (preset) => preset.id === state.project.globalLayer.presetId
-    );
     const visiblePresetEntries = this.getVisiblePresetEntries(
       state.project.presetLibrary.presets
     );
-    const selectableGlobalPresets = this.getSelectableGlobalPresets();
     const outputUrl = this.getOutputUrl();
     const lanHintUrl = this.getLanHintUrl();
     const debugState = this.compositor?.getDebugState?.() ?? {};
@@ -1387,6 +1376,15 @@ export class AdminApp {
     const projectDiagnostics = state.projectDiagnostics ?? {};
     const catalogSummary =
       this.availablePresetSummary ?? debugState.presetCatalogSummary ?? null;
+    const visibleSurfaceSummary =
+      debugState.visibleSurfaceGeometries?.length
+        ? debugState.visibleSurfaceGeometries
+            .map(
+              (entry) =>
+                `${entry.elementName ?? entry.elementId}:${entry.visibleGeometries?.length ?? 0}`
+            )
+            .join(", ")
+        : "none";
     const sessionMarkup = `
       <div class="panel-header">
         <h3>Session</h3>
@@ -1398,27 +1396,8 @@ export class AdminApp {
           <span class="chip">${state.viewerCount} viewer(s)</span>
           <span class="chip">${state.project.presetLibrary.presets.length} presets available</span>
         </div>
-        <label ${makeTitle("Chooses the shader preset that renders behind all local element surfaces.")}>
-          Global preset
-          <select id="global-preset">
-            ${this.renderPresetOptions(
-              selectableGlobalPresets,
-              state.project.globalLayer.presetId
-            )}
-          </select>
-        </label>
-        ${
-          selectedGlobalPreset?.sourceType === "solid"
-            ? `
-              <label ${makeTitle("Used when the global preset is set to Solid Color. This is a flat background fill behind all elements.")}>
-                Solid color
-                <input id="global-solid-color" type="color" value="${escapeHtml(selectedGlobalPreset.overrides?.baseColor ?? "#101820")}" />
-              </label>
-            `
-            : ""
-        }
         <div class="field-grid compact">
-          <label ${makeTitle("Automatically advances the global preset after the configured interval.")}>
+          <label ${makeTitle("Automatically advances the shader preset across all shader-surface elements after the configured interval.")}>
             <span>Cycle presets</span>
             <input id="preset-cycle-enabled" type="checkbox" ${state.project.output.presets.cycleEnabled ? "checked" : ""} />
           </label>
@@ -1438,21 +1417,9 @@ export class AdminApp {
             Manual blend seconds
             <input id="preset-user-blend-seconds" type="number" min="0" max="20" step="0.1" value="${state.project.output.presets.userBlendSeconds}" />
           </label>
-          <label ${makeTitle("Overall opacity of the global shader layer before local surfaces and clip masks are applied.")}>
+          <label ${makeTitle("Master opacity multiplier applied to all rendered elements in the output.")}>
             Global opacity
             <input id="global-opacity" type="number" min="0" max="1" step="0.05" value="${state.project.globalLayer.opacity}" />
-          </label>
-          <label ${makeTitle("How strongly interaction fields bend, tint and pulse the global Butterchurn layer.")}>
-            Global interaction
-            <input id="global-interaction-mix" type="number" min="0" max="1" step="0.05" value="${state.project.globalLayer.interactionMix}" />
-          </label>
-          <label ${makeTitle("Adds subtle position drift to the global layer based on the active interaction fields.")}>
-            Global drift
-            <input id="global-drift" type="number" min="0" max="0.4" step="0.01" value="${state.project.globalLayer.drift}" />
-          </label>
-          <label ${makeTitle("Scales the global Butterchurn layer before it is composited into the output.")}>
-            Global scale
-            <input id="global-scale" type="number" min="0.8" max="1.5" step="0.01" value="${state.project.globalLayer.scale}" />
           </label>
           <label ${makeTitle("Limits the admin and output render loops to a target frame rate.")}>
             Frame limit
@@ -1534,9 +1501,7 @@ export class AdminApp {
         </div>
       </div>
     `;
-    if (!this.shouldPreservePanel("#session-panel", "global-solid-color")) {
-      this.root.querySelector("#session-panel").innerHTML = sessionMarkup;
-    }
+    this.root.querySelector("#session-panel").innerHTML = sessionMarkup;
 
     this.root.querySelector("#element-list").innerHTML = `
       <div class="panel-header">
@@ -1584,7 +1549,9 @@ export class AdminApp {
       </div>
     `;
 
-    this.root.querySelector("#preset-list").innerHTML = `
+    const presetPanel = this.root.querySelector("#preset-list");
+    if (presetPanel) {
+      presetPanel.innerHTML = `
       <div class="panel-header">
         <h3>Presets</h3>
         <span class="tag">${visiblePresetEntries.length}/${state.project.presetLibrary.presets.length} visible</span>
@@ -1651,12 +1618,12 @@ export class AdminApp {
           )
           .join("")}
       </div>
-    `;
+      `;
+    }
 
     this.root.querySelector("#status-bar").innerHTML = `
       <span class="tag">Project <strong>${escapeHtml(state.project.meta.name)}</strong></span>
       <span class="tag">Canvas <strong>${state.project.output.width}×${state.project.output.height}</strong></span>
-      <span class="tag">Global renderer <strong>${escapeHtml(this.compositor?.globalRenderer?.getRuntimeMode?.() ?? "pending")}</strong></span>
       <span class="tag">Autosave <strong>${escapeHtml(state.autosaveStatus)}</strong></span>
       <span class="tag">Selected point <strong>${this.selectedPointIndex == null ? "none" : this.selectedPointIndex + 1}</strong></span>
     `;
@@ -1675,19 +1642,12 @@ export class AdminApp {
             <small>Error: ${escapeHtml(state.autosaveError ?? "none")}</small>
           </div>
           <div class="debug-card">
-            <strong>Global renderer</strong>
-            <small>Mode: ${escapeHtml(debugState.globalRenderer?.runtimeMode ?? "pending")}</small>
-            <small>Active preset: ${escapeHtml(debugState.globalRenderer?.activePresetName ?? "none")}</small>
-            <small>Requested preset: ${escapeHtml(debugState.globalRenderer?.requestedPresetName ?? "none")}</small>
-            <small>Fallback: ${escapeHtml(debugState.globalRenderer?.fallbackMode ?? "none")}</small>
-            <small>Error: ${escapeHtml(debugState.globalRenderer?.lastError ?? "none")}</small>
-            <small>Bundle: ${escapeHtml(debugState.globalRenderer?.bundlePath ?? "mock-only")}</small>
-          </div>
-          <div class="debug-card">
             <strong>Render config</strong>
             <small>Frame limit: ${state.project.output.rendering.frameLimit}</small>
             <small>Canvas scale: ${state.project.output.rendering.canvasScale}x</small>
             <small>Mesh: ${state.project.output.rendering.meshWidth} × ${state.project.output.rendering.meshHeight}</small>
+            <small>Global opacity: ${state.project.globalLayer.opacity.toFixed(2)}</small>
+            <small>Visible surfaces: ${escapeHtml(visibleSurfaceSummary)}</small>
           </div>
           <div class="debug-card">
             <strong>Project diagnostics</strong>
@@ -1743,7 +1703,6 @@ export class AdminApp {
     `;
 
     const shaderSurfaceActive = selectedElement?.roles?.shaderSurface === true;
-    const interactionFieldActive = selectedElement?.roles?.interactionField === true;
 
     const inspectorMarkup = selectedElement
       ? `
@@ -1764,15 +1723,11 @@ export class AdminApp {
             Opacity
             <input id="element-opacity" type="number" min="0" max="1" step="0.05" value="${selectedElement.style.opacity}" />
           </label>
-          <label ${makeTitle("Softens edges for paint, clip and interaction usage. Higher values create more gradual transitions.")}>
-            Feather
-            <input id="element-feather" type="number" min="0" max="1" step="0.01" value="${selectedElement.style.feather}" />
-          </label>
         </div>
         <div class="field-grid">
           <label ${makeTitle("Local shader preset used when the element acts as a shader surface.")}>
             Shader preset
-            <select id="element-preset" ${shaderSurfaceActive ? "" : "disabled"}>
+            <select id="element-preset">
               ${this.renderPresetOptions(
                 state.project.presetLibrary.presets,
                 selectedElement.shaderBinding.presetId
@@ -1782,17 +1737,17 @@ export class AdminApp {
         </div>
         ${
           shaderSurfaceActive
-            ? `<p class="muted">This element reacts to interaction fields because <code>shaderSurface</code> is active.</p>`
-            : `<p class="muted">Shader preset, blend mode and reaction mode only affect elements with <code>shaderSurface</code> enabled.</p>`
+            ? `<p class="muted">This element can render its own shader content when <code>shaderSurface</code> is active.</p>`
+            : `<p class="muted">Shader preset and mapping controls only affect elements with <code>shaderSurface</code> enabled.</p>`
         }
         <div class="field-grid compact">
           <label ${makeTitle("Opacity of the local shader surface before additional blend and interaction effects are applied.")}>
             Shader opacity
-            <input id="shader-opacity" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.opacity}" ${shaderSurfaceActive ? "" : "disabled"} />
+            <input id="shader-opacity" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.opacity}" />
           </label>
           <label ${makeTitle("Canvas blend mode used when this shader surface is composited over the current output.")}>
             Blend mode
-            <select id="shader-blend-mode" ${shaderSurfaceActive ? "" : "disabled"}>
+            <select id="shader-blend-mode">
               <option value="normal" ${selectedElement.shaderBinding.blendMode === "normal" ? "selected" : ""}>Normal</option>
               <option value="screen" ${selectedElement.shaderBinding.blendMode === "screen" ? "selected" : ""}>Screen</option>
               <option value="add" ${selectedElement.shaderBinding.blendMode === "add" ? "selected" : ""}>Add</option>
@@ -1802,33 +1757,19 @@ export class AdminApp {
           </label>
           <label ${makeTitle("Scales the shader content within the selected surface. Useful for avoiding a flat fullscreen-clipped look.")}>
             Shader scale
-            <input id="shader-scale" type="number" min="0.25" max="3" step="0.05" value="${selectedElement.shaderBinding.scale}" ${shaderSurfaceActive ? "" : "disabled"} />
+            <input id="shader-scale" type="number" min="0.25" max="3" step="0.05" value="${selectedElement.shaderBinding.scale}" />
           </label>
           <label ${makeTitle("Rotates the mapped shader content inside the surface.")}>
             Rotation
-            <input id="shader-rotation" type="number" min="-180" max="180" step="1" value="${selectedElement.shaderBinding.rotation}" ${shaderSurfaceActive ? "" : "disabled"} />
+            <input id="shader-rotation" type="number" min="-180" max="180" step="1" value="${selectedElement.shaderBinding.rotation}" />
           </label>
           <label ${makeTitle("Offsets the local shader horizontally inside the surface. Values are relative to the surface width.")}>
             Offset X
-            <input id="shader-offset-x" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetX}" ${shaderSurfaceActive ? "" : "disabled"} />
+            <input id="shader-offset-x" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetX}" />
           </label>
           <label ${makeTitle("Offsets the local shader vertically inside the surface. Values are relative to the surface height.")}>
             Offset Y
-            <input id="shader-offset-y" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetY}" ${shaderSurfaceActive ? "" : "disabled"} />
-          </label>
-          <label ${makeTitle("Controls how strongly nearby interaction fields distort, tint or pulse this shader surface.")}>
-            Interaction mix
-            <input id="shader-interaction-mix" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.interactionMix}" ${shaderSurfaceActive ? "" : "disabled"} />
-          </label>
-          <label ${makeTitle("Chooses how interaction fields affect the shader surface after the base Butterchurn frame is rendered.")}>
-            Reaction mode
-            <select id="shader-reaction-mode" ${shaderSurfaceActive ? "" : "disabled"}>
-              <option value="tint" ${selectedElement.shaderBinding.reactionMode === "tint" ? "selected" : ""}>Tint</option>
-              <option value="pulse" ${selectedElement.shaderBinding.reactionMode === "pulse" ? "selected" : ""}>Pulse</option>
-              <option value="warp" ${selectedElement.shaderBinding.reactionMode === "warp" ? "selected" : ""}>Warp</option>
-              <option value="glow" ${selectedElement.shaderBinding.reactionMode === "glow" ? "selected" : ""}>Glow</option>
-              <option value="reflect" ${selectedElement.shaderBinding.reactionMode === "reflect" ? "selected" : ""}>Reflect</option>
-            </select>
+            <input id="shader-offset-y" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetY}" />
           </label>
         </div>
         <div class="role-grid">
@@ -1849,38 +1790,7 @@ export class AdminApp {
             interactionField
           </label>
         </div>
-        <div class="panel-header" style="padding:0">
-          <h3>Interaction</h3>
-        </div>
-        ${
-          interactionFieldActive && !shaderSurfaceActive
-            ? `<p class="muted">This element currently writes an interaction field, but it does not react itself. Enable <code>shaderSurface</code> as well if this same element should visibly respond.</p>`
-            : interactionFieldActive
-              ? `<p class="muted">This element both emits interaction data and can visibly react because <code>shaderSurface</code> is enabled.</p>`
-              : `<p class="muted">Enable <code>interactionField</code> if this element should influence the global layer or other shader surfaces.</p>`
-        }
-        <div class="field-grid compact">
-          <label ${makeTitle("Base alpha that this element writes into the interaction field buffer.")}>
-            Field alpha
-            <input id="interaction-alpha" type="number" min="0" max="1" step="0.05" value="${selectedElement.interaction.alpha}" />
-          </label>
-          <label ${makeTitle("Expands how far the interaction field reaches from the element centroid toward the surface edges.")}>
-            Field distance
-            <input id="interaction-distance" type="number" min="0" max="1" step="0.05" value="${selectedElement.interaction.distance}" />
-          </label>
-          <label ${makeTitle("Overall strength this field contributes when the compositor derives shader reactions from all active interaction fields.")}>
-            Influence
-            <input id="interaction-influence" type="number" min="0" max="1" step="0.05" value="${selectedElement.interaction.influence}" />
-          </label>
-          <label ${makeTitle("Adds temporal scale pulsing to shader reactions driven by this field.")}>
-            Pulse
-            <input id="interaction-pulse" type="number" min="0" max="1" step="0.05" value="${selectedElement.interaction.pulse}" />
-          </label>
-          <label ${makeTitle("Adds rotational drift and directional pull when this field affects shader surfaces or the global layer.")}>
-            Swirl
-            <input id="interaction-swirl" type="number" min="0" max="1" step="0.05" value="${selectedElement.interaction.swirl}" />
-          </label>
-        </div>
+        <p class="muted"><code>clip + interactionField</code> performs boolean cutting without fill. <code>clip</code> alone masks only. <code>interactionField</code> alone performs boolean cutting and can inject this element's shader into the cut zone.</p>
         <div class="panel-header" style="padding:0">
           <h3>Geometry</h3>
           <button class="danger" id="remove-element" ${makeTitle("Deletes the currently selected element from the project.")}>Delete element</button>
