@@ -1,8 +1,14 @@
 # ButterVizMap
 
-ButterVizMap is a browser-based video-mapping studio built on top of a Butterchurn fork.
+ButterVizMap is the repository behind **VizMap Studio**.
 
-The repository still contains the original Butterchurn rendering engine, but now adds a local studio application with:
+The project keeps the original Butterchurn rendering engine and adds a studio runtime for browser-first video mapping workflows.
+
+## Overhaul Status (master)
+
+The `buttervizmap-studio-overhaul` state is now merged into `master`.
+
+Current studio baseline:
 
 - a control route at `/admin`
 - a dedicated output route at `/output/:sessionId`
@@ -13,6 +19,14 @@ The repository still contains the original Butterchurn rendering engine, but now
 - scene recall
 - polygon and quad elements with clip, paint, shader-surface and interaction roles
 - admin-master audio sync for LAN viewers
+
+## Foundation: ButterchurnViz
+
+VizMap Studio is built on top of the Butterchurn/ButterchurnViz ecosystem:
+
+- Butterchurn remains the rendering core in `src/`
+- the `butterchurn-presets` converted catalog is used for ButterchurnViz-compatible preset browsing
+- studio output and preset flow are designed to stay aligned with the behavior expected from `butterchurnviz.com`
 
 ## Studio Quick Start
 
@@ -41,6 +55,20 @@ Open:
 
 The admin panel is the master runtime. Audio analysis is captured on the admin machine and synchronized to output viewers, so a second device showing `/output/:sessionId` does not need local microphone access.
 
+## UI Preview
+
+Admin route (`/admin`) on desktop:
+
+![VizMap Studio Admin Desktop](docs/screenshots/ui-admin-desktop.png)
+
+Output route (`/output/:sessionId`) on desktop:
+
+![VizMap Studio Output Desktop](docs/screenshots/ui-output-desktop.png)
+
+Admin route (`/admin`) mobile viewport:
+
+![VizMap Studio Admin Mobile](docs/screenshots/ui-admin-mobile.png)
+
 ## Docker Deployment
 
 Build and run with Docker Compose:
@@ -55,8 +83,8 @@ The Docker image now includes the repository preset JSON catalog from `experimen
 
 ## Documentation
 
-- [Studio overview](/Users/axell/Documents/Projects/ButterVizMap/docs/studio-overview.md)
-- [Testing guide](/Users/axell/Documents/Projects/ButterVizMap/docs/testing.md)
+- [Studio overview](docs/studio-overview.md)
+- [Testing guide](docs/testing.md)
 
 ## Automated Tests
 
