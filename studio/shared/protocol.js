@@ -26,6 +26,8 @@ function isPlainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value);
 }
 
+const BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 export function mergeProjectPatch(target, patch) {
   if (!isPlainObject(target) || !isPlainObject(patch)) {
     return patch;
@@ -33,7 +35,11 @@ export function mergeProjectPatch(target, patch) {
 
   const merged = { ...target };
 
-  Object.entries(patch).forEach(([key, value]) => {
+  Object.keys(patch).forEach((key) => {
+    if (BLOCKED_KEYS.has(key)) {
+      return;
+    }
+    const value = patch[key];
     if (Array.isArray(value)) {
       merged[key] = value;
     } else if (isPlainObject(value) && isPlainObject(target[key])) {

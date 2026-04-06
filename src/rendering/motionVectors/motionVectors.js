@@ -41,6 +41,7 @@ export default class MotionVectors {
       `.trim()
     );
     this.gl.compileShader(vertShader);
+    ShaderUtils.checkShader(this.gl, vertShader, "MotionVectors vert");
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
     this.gl.shaderSource(
@@ -58,10 +59,12 @@ export default class MotionVectors {
       `.trim()
     );
     this.gl.compileShader(fragShader);
+    ShaderUtils.checkShader(this.gl, fragShader, "MotionVectors frag");
 
     this.gl.attachShader(this.shaderProgram, vertShader);
     this.gl.attachShader(this.shaderProgram, fragShader);
     this.gl.linkProgram(this.shaderProgram);
+    ShaderUtils.checkProgram(this.gl, this.shaderProgram, "MotionVectors");
 
     this.aPosLoc = this.gl.getAttribLocation(this.shaderProgram, "aPos");
 

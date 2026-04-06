@@ -96,6 +96,7 @@ export default class CustomShape {
       `.trim()
     );
     this.gl.compileShader(vertShader);
+    ShaderUtils.checkShader(this.gl, vertShader, "DarkenCenter vert");
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
     this.gl.shaderSource(
@@ -113,10 +114,12 @@ export default class CustomShape {
       `.trim()
     );
     this.gl.compileShader(fragShader);
+    ShaderUtils.checkShader(this.gl, fragShader, "DarkenCenter frag");
 
     this.gl.attachShader(this.shaderProgram, vertShader);
     this.gl.attachShader(this.shaderProgram, fragShader);
     this.gl.linkProgram(this.shaderProgram);
+    ShaderUtils.checkProgram(this.gl, this.shaderProgram, "DarkenCenter");
 
     this.aPosLocation = this.gl.getAttribLocation(this.shaderProgram, "aPos");
     this.aColorLocation = this.gl.getAttribLocation(

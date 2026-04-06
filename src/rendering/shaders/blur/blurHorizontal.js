@@ -45,6 +45,7 @@ export default class BlurHorizontal {
       `.trim()
     );
     this.gl.compileShader(vertShader);
+    ShaderUtils.checkShader(this.gl, vertShader, "BlurHorizontal vert");
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
     this.gl.shaderSource(
@@ -93,10 +94,12 @@ export default class BlurHorizontal {
        }`
     );
     this.gl.compileShader(fragShader);
+    ShaderUtils.checkShader(this.gl, fragShader, "BlurHorizontal frag");
 
     this.gl.attachShader(this.shaderProgram, vertShader);
     this.gl.attachShader(this.shaderProgram, fragShader);
     this.gl.linkProgram(this.shaderProgram);
+    ShaderUtils.checkProgram(this.gl, this.shaderProgram, "BlurHorizontal");
 
     this.positionLocation = this.gl.getAttribLocation(
       this.shaderProgram,

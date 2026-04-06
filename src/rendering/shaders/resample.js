@@ -28,6 +28,7 @@ export default class ResampleShader {
        }`
     );
     this.gl.compileShader(vertShader);
+    ShaderUtils.checkShader(this.gl, vertShader, "ResampleShader vert");
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
     this.gl.shaderSource(
@@ -46,10 +47,12 @@ export default class ResampleShader {
        }`
     );
     this.gl.compileShader(fragShader);
+    ShaderUtils.checkShader(this.gl, fragShader, "ResampleShader frag");
 
     this.gl.attachShader(this.shaderProgram, vertShader);
     this.gl.attachShader(this.shaderProgram, fragShader);
     this.gl.linkProgram(this.shaderProgram);
+    ShaderUtils.checkProgram(this.gl, this.shaderProgram, "ResampleShader");
 
     this.positionLocation = this.gl.getAttribLocation(
       this.shaderProgram,

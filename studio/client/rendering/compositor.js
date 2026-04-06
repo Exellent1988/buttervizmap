@@ -866,11 +866,14 @@ export class StudioCompositor {
       elements: new Map(),
     };
     this.lastVisibleSurfaceGeometries = [];
+    this._rendererGraphDirty = false;
+    this._layerCanvasCache = new Map();
   }
 
   async setProject(project) {
     this.project = project;
     this.lastVisibleSurfaceGeometries = [];
+    this._rendererGraphDirty = true;
     await this.ensureRendererGraph();
   }
 
@@ -879,9 +882,10 @@ export class StudioCompositor {
   }
 
   async ensureRendererGraph() {
-    if (!this.project) {
+    if (!this.project || !this._rendererGraphDirty) {
       return;
     }
+    this._rendererGraphDirty = false;
 
     const { width, height } = this.project.output;
     const renderConfig = {
@@ -893,6 +897,17 @@ export class StudioCompositor {
     const activeShaderElements = this.project.elements.filter((element) =>
       elementNeedsShaderCanvas(element)
     );
+    const activeIds = new Set(activeShaderElements.map((el) => el.id));
+
+    // Remove renderers and cached canvases for elements that are no longer in the project.
+    for (const elementId of [...this.elementRenderers.keys()]) {
+      if (!activeIds.has(elementId)) {
+        this.elementRenderers.delete(elementId);
+        this.loadedPresetIds.elements.delete(elementId);
+        this._layerCanvasCache.delete(`paint-${elementId}`);
+        this._layerCanvasCache.delete(`shader-${elementId}`);
+      }
+    }
 
     for (const element of activeShaderElements) {
       if (!this.elementRenderers.has(element.id)) {
@@ -910,21 +925,12 @@ export class StudioCompositor {
               ? this.project.output.presets.autoBlendSeconds
               : this.project.output.presets.userBlendSeconds
             : 0;
-        const didLoad = await renderer.loadPreset(
-          preset,
-          blendSeconds
-        );
+        const didLoad = await renderer.loadPreset(preset, blendSeconds);
         if (didLoad) {
           this.loadedPresetIds.elements.set(element.id, preset.id);
         }
       }
     }
-
-    [...this.loadedPresetIds.elements.keys()].forEach((elementId) => {
-      if (!activeShaderElements.find((element) => element.id === elementId)) {
-        this.loadedPresetIds.elements.delete(elementId);
-      }
-    });
   }
 
   getDebugState() {
@@ -947,6 +953,21 @@ export class StudioCompositor {
       },
       visibleSurfaceGeometries: this.lastVisibleSurfaceGeometries,
     };
+  }
+
+  _getLayerCanvas(key, width, height) {
+    let canvas = this._layerCanvasCache.get(key);
+    const w = Math.max(1, Math.round(width));
+    const h = Math.max(1, Math.round(height));
+    if (!canvas || canvas.width !== w || canvas.height !== h) {
+      canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      this._layerCanvasCache.set(key, canvas);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, w, h);
+    return canvas;
   }
 
   ensureCanvasSize() {
@@ -972,7 +993,7 @@ export class StudioCompositor {
     this.lastVisibleSurfaceGeometries = [];
 
     this.context.clearRect(0, 0, width, height);
-    this.context.fillStyle = OUTPUT_BACKGROUND;
+    this.context.fillStyle = this.project.output.background ?? OUTPUT_BACKGROUND;
     this.context.fillRect(0, 0, width, height);
 
     const orderedElements = [...this.project.elements]
@@ -1013,7 +1034,7 @@ export class StudioCompositor {
       });
 
       if (element.roles.paint && elementCutterType !== "booleanCutterWithFill") {
-        const paintLayer = createSizedCanvas(width, height);
+        const paintLayer = this._getLayerCanvas(`paint-${element.id}`, width, height);
         const paintContext = paintLayer.getContext("2d");
         drawPaintLayerWithPrecut({
           context: paintContext,
@@ -1039,7 +1060,7 @@ export class StudioCompositor {
           continue;
         }
 
-        const shaderLayer = createSizedCanvas(width, height);
+        const shaderLayer = this._getLayerCanvas(`shader-${element.id}`, width, height);
         const shaderContext = shaderLayer.getContext("2d");
         const { visibleLoops, fillLayer } = drawShaderSurfaceWithPrecut({
           context: shaderContext,
