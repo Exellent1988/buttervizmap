@@ -95,6 +95,7 @@ export class AdaptiveRenderer {
     this.hasRenderedCurrentPreset = false;
     this._lastFillTexture = null;
     this._lastContourTexture = null;
+    this._renderFailedPresetId = null;
     this.studioInteractionState = {
       enabled: false,
       fillTexture: null,
@@ -211,6 +212,7 @@ export class AdaptiveRenderer {
     this.forceMock = presetEntry?.sourceType === "solid" || presetEntry?.sourceType === "builtin";
     this.fallbackMode = presetEntry?.sourceType === "solid" ? "solid" : this.forceMock ? "mock" : null;
     this.lastError = null;
+    this._renderFailedPresetId = null;
     await this.init();
     if (this.runtime?.type === "butterchurn" && !this.forceMock) {
       try {
@@ -281,7 +283,12 @@ export class AdaptiveRenderer {
   }
 
   async render({ timestamp, audioFrame, interactionSummary }) {
+    const currentPresetId = this.currentPreset?.id ?? null;
+    const renderFailed = this._renderFailedPresetId !== null &&
+      this._renderFailedPresetId === currentPresetId;
+
     const useButterchurn =
+      !renderFailed &&
       this.runtimeMode !== "error" &&
       this.runtime?.type === "butterchurn" &&
       this.currentPreset &&
@@ -325,9 +332,10 @@ export class AdaptiveRenderer {
       });
       this.hasRenderedCurrentPreset = true;
     } catch (error) {
+      // Mark only this preset as render-failed; other presets can still run normally.
+      this._renderFailedPresetId = currentPresetId;
       this.lastError = error instanceof Error ? error.message : String(error);
-      this.runtimeMode = "error";
-      console.error("[Butterchurn] render error – falling back to mock", error);
+      console.warn("[Butterchurn] render error for preset", currentPresetId, "– using mock fallback:", this.lastError);
       this.mockRenderer.render({ timestamp, audioFrame, interactionSummary });
     }
   }
@@ -359,6 +367,7 @@ export class AdaptiveRenderer {
       requestedPresetName: this.lastRequestedPreset?.name ?? null,
       fallbackMode: this.fallbackMode,
       lastFailedPresetId: this.lastFailedPresetId,
+      renderFailedPresetId: this._renderFailedPresetId,
       lastPresetInfo: this.lastPresetInfo,
       lastError: this.lastError,
       bundlePath: this.bundlePath,
