@@ -74,6 +74,7 @@ export default class CustomShape {
       `.trim()
     );
     this.gl.compileShader(vertShader);
+    ShaderUtils.checkShader(this.gl, vertShader, "CustomShape vert");
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
     this.gl.shaderSource(
@@ -98,10 +99,12 @@ export default class CustomShape {
       `.trim()
     );
     this.gl.compileShader(fragShader);
+    ShaderUtils.checkShader(this.gl, fragShader, "CustomShape frag");
 
     this.gl.attachShader(this.shaderProgram, vertShader);
     this.gl.attachShader(this.shaderProgram, fragShader);
     this.gl.linkProgram(this.shaderProgram);
+    ShaderUtils.checkProgram(this.gl, this.shaderProgram, "CustomShape");
 
     this.aPosLocation = this.gl.getAttribLocation(this.shaderProgram, "aPos");
     this.aColorLocation = this.gl.getAttribLocation(
@@ -137,6 +140,7 @@ export default class CustomShape {
       `.trim()
     );
     this.gl.compileShader(vertShader);
+    ShaderUtils.checkShader(this.gl, vertShader, "CustomShape border vert");
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
     this.gl.shaderSource(
@@ -154,10 +158,12 @@ export default class CustomShape {
       `.trim()
     );
     this.gl.compileShader(fragShader);
+    ShaderUtils.checkShader(this.gl, fragShader, "CustomShape border frag");
 
     this.gl.attachShader(this.borderShaderProgram, vertShader);
     this.gl.attachShader(this.borderShaderProgram, fragShader);
     this.gl.linkProgram(this.borderShaderProgram);
+    ShaderUtils.checkProgram(this.gl, this.borderShaderProgram, "CustomShape border");
 
     this.aBorderPosLoc = this.gl.getAttribLocation(
       this.borderShaderProgram,

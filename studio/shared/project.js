@@ -75,6 +75,13 @@ function normalizeEnum(value, allowedValues, fallback) {
   return allowedValues.has(value) ? value : fallback;
 }
 
+function normalizeColor(value, fallback) {
+  if (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value)) {
+    return value;
+  }
+  return fallback;
+}
+
 function clampInteger(value, fallback, min, max) {
   const parsed = Math.round(Number(value));
   if (!Number.isFinite(parsed)) {
@@ -419,7 +426,7 @@ export function normalizeProjectWithDiagnostics(project = {}, options = {}) {
     output: {
       width: clampNumber(project.output?.width, 1280, 320, 8192),
       height: clampNumber(project.output?.height, 720, 180, 8192),
-      background: "#000000",
+      background: normalizeColor(project.output?.background, "#000000"),
       rendering: {
         frameLimit: clampInteger(project.output?.rendering?.frameLimit, 45, 15, 120),
         canvasScale: clampNumber(project.output?.rendering?.canvasScale, 2, 0.5, 2),

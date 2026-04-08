@@ -2,6 +2,20 @@ const lineMatcher = /uniform sampler2D sampler_(?:.+?);/g;
 const samplerMatcher = /uniform sampler2D sampler_(.+?);/;
 
 export default class ShaderUtils {
+  static checkShader(gl, shader, label = "shader") {
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(shader) ?? "(no info log)";
+      console.error(`[Butterchurn] ${label} compile error:\n${log}`);
+    }
+  }
+
+  static checkProgram(gl, program, label = "program") {
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      const log = gl.getProgramInfoLog(program) ?? "(no info log)";
+      console.error(`[Butterchurn] ${label} link error:\n${log}`);
+    }
+  }
+
   static getShaderParts(t) {
     const sbIndex = t.indexOf("shader_body");
     if (t && sbIndex > -1) {

@@ -52,6 +52,7 @@ export default class BasicWaveform {
       `.trim()
     );
     this.gl.compileShader(vertShader);
+    ShaderUtils.checkShader(this.gl, vertShader, "BasicWaveform vert");
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
     this.gl.shaderSource(
@@ -69,10 +70,12 @@ export default class BasicWaveform {
       `.trim()
     );
     this.gl.compileShader(fragShader);
+    ShaderUtils.checkShader(this.gl, fragShader, "BasicWaveform frag");
 
     this.gl.attachShader(this.shaderProgram, vertShader);
     this.gl.attachShader(this.shaderProgram, fragShader);
     this.gl.linkProgram(this.shaderProgram);
+    ShaderUtils.checkProgram(this.gl, this.shaderProgram, "BasicWaveform");
 
     this.aPosLoc = this.gl.getAttribLocation(this.shaderProgram, "aPos");
 

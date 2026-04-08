@@ -32,6 +32,13 @@ export class SessionSocket {
     clearTimeout(this.reconnectHandle);
     this.reconnectHandle = null;
     this.manualClose = false;
+
+    // Close any existing socket before creating a new one to avoid orphaned connections.
+    if (this.socket && this.socket.readyState <= WebSocket.OPEN) {
+      this.socket.close();
+      this.socket = null;
+    }
+
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${protocol}//${location.host}/ws`;
     this.socket = new WebSocket(url);
@@ -55,7 +62,16 @@ export class SessionSocket {
     });
 
     this.socket.addEventListener("message", (event) => {
-      const message = parseSocketMessage(event.data);
+      let message;
+      try {
+        message = parseSocketMessage(event.data);
+      } catch (error) {
+        console.warn("SessionSocket received invalid message", {
+          preview: String(event.data).slice(0, 120),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
       this.debugState.receivedMessages += 1;
       this.debugState.lastReceivedAt = new Date().toISOString();
       if (message.type === MESSAGE_TYPES.AUDIO_FRAME) {

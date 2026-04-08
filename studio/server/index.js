@@ -165,7 +165,7 @@ function findLanAddress() {
   const interfaces = os.networkInterfaces();
   for (const values of Object.values(interfaces)) {
     for (const entry of values ?? []) {
-      if (entry.family === "IPv4" && !entry.internal) {
+      if ((entry.family === "IPv4" || entry.family === 4) && !entry.internal) {
         return entry.address;
       }
     }
@@ -338,7 +338,10 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
     let activeSession = null;
     let activeRole = null;
 
-    peer.on("message", async (rawMessage) => {
+    // Serialize async message processing per peer to avoid interleaved mutations.
+    let messageQueue = Promise.resolve();
+
+    async function handleMessage(rawMessage) {
       let message;
       try {
         message = parseSocketMessage(rawMessage);
@@ -356,6 +359,14 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
           activeSession = ensureSession(message.payload.sessionId);
 
           if (activeRole === "admin") {
+            // Disconnect previous admin gracefully before replacing
+            if (activeSession.adminPeer && activeSession.adminPeer !== peer) {
+              try {
+                activeSession.adminPeer.close();
+              } catch (_) {
+                // ignore
+              }
+            }
             activeSession.adminPeer = peer;
             if (message.payload.project) {
               activeSession.project = await ensureProjectCatalog(
@@ -397,7 +408,13 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
           return;
         }
 
+        // Only the current admin peer may mutate project state or push audio.
+        const isAdmin = activeRole === "admin" && activeSession.adminPeer === peer;
+
         if (message.type === MESSAGE_TYPES.PROJECT_SNAPSHOT) {
+          if (!isAdmin) {
+            return;
+          }
           activeSession.project = await ensureProjectCatalog(
             normalizeProject(message.payload.project)
           );
@@ -411,6 +428,9 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
         }
 
         if (message.type === MESSAGE_TYPES.PROJECT_PATCH) {
+          if (!isAdmin) {
+            return;
+          }
           activeSession.project = await ensureProjectCatalog(
             normalizeProject(mergeProjectPatch(activeSession.project, message.payload.patch))
           );
@@ -432,6 +452,9 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
         }
 
         if (message.type === MESSAGE_TYPES.AUDIO_FRAME) {
+          if (!isAdmin) {
+            return;
+          }
           activeSession.latestAudioFrame = message.payload;
           activeSession.viewerPeers.forEach((viewerPeer) => send(viewerPeer, message));
           return;
@@ -451,6 +474,10 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
           error: error instanceof Error ? error.stack ?? error.message : String(error),
         });
       }
+    }
+
+    peer.on("message", (rawMessage) => {
+      messageQueue = messageQueue.then(() => handleMessage(rawMessage));
     });
 
     peer.on("error", (error) => {
@@ -469,6 +496,11 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
 
       activeSession.viewerPeers.delete(peer);
       notifyViewerState(activeSession);
+
+      // Prune session once no peers remain
+      if (!activeSession.adminPeer && activeSession.viewerPeers.size === 0) {
+        sessions.delete(activeSession.sessionId);
+      }
     });
   });
 
