@@ -52,12 +52,13 @@ function formatList(values = []) {
 }
 
 export class AdminApp {
-  constructor({ root, store, sessionSocket, sessionId, lanAddress }) {
+  constructor({ root, store, sessionSocket, sessionId, lanAddress, publicOrigin }) {
     this.root = root;
     this.store = store;
     this.sessionSocket = sessionSocket;
     this.sessionId = sessionId;
     this.lanAddress = lanAddress;
+    this.publicOrigin = publicOrigin;
     this.pointerState = null;
     this.selectedPointIndex = null;
     this.audioSource = new DemoAudioSource();
@@ -368,7 +369,7 @@ export class AdminApp {
   }
 
   getOutputUrl() {
-    return `${location.origin}/output/${this.sessionId}`;
+    return `${this.publicOrigin || location.origin}/output/${this.sessionId}`;
   }
 
   getLanHintUrl() {

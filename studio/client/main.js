@@ -80,6 +80,7 @@ async function boot() {
       sessionSocket,
       sessionId,
       lanAddress: studioConfig.lanAddress,
+      publicOrigin: studioConfig.publicOrigin,
     });
   } else {
     app = new OutputApp({

@@ -173,6 +173,48 @@ function findLanAddress() {
   return "127.0.0.1";
 }
 
+function normalizeOrigin(value) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.origin;
+  } catch (error) {
+    return null;
+  }
+}
+
+function getFirstForwardedValue(value) {
+  if (!value) {
+    return null;
+  }
+
+  return String(value)
+    .split(",")[0]
+    .trim();
+}
+
+function getRequestOrigin(request, configuredPublicOrigin) {
+  if (configuredPublicOrigin) {
+    return configuredPublicOrigin;
+  }
+
+  const forwardedHost = getFirstForwardedValue(request.headers["x-forwarded-host"]);
+  const forwardedProto = getFirstForwardedValue(request.headers["x-forwarded-proto"]);
+  const host = forwardedHost || request.headers.host;
+  if (!host) {
+    return null;
+  }
+
+  const protocol =
+    forwardedProto ||
+    (request.socket.encrypted ? "https" : "http");
+
+  return `${protocol}://${host}`;
+}
+
 function createSession(sessionId) {
   return {
     sessionId,
@@ -183,7 +225,11 @@ function createSession(sessionId) {
   };
 }
 
-export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
+export function createStudioServer({
+  port = 4177,
+  host = "0.0.0.0",
+  publicOrigin = normalizeOrigin(process.env.PUBLIC_ORIGIN),
+} = {}) {
   const sessions = new Map();
   let currentPort = port;
   const trackedSockets = new Set();
@@ -287,10 +333,12 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
       }
       return;
     } else if (url.pathname === "/studio-config.json") {
+      const requestOrigin = getRequestOrigin(request, publicOrigin);
       response.setHeader("Content-Type", "application/json; charset=utf-8");
       response.end(
         JSON.stringify({
           wsPath: "/ws",
+          publicOrigin: requestOrigin,
           lanAddress: findLanAddress(),
           port: currentPort,
         })
@@ -519,6 +567,7 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
             host,
             port: currentPort,
             lanAddress: findLanAddress(),
+            publicOrigin,
           });
         };
 
@@ -558,8 +607,11 @@ export function createStudioServer({ port = 4177, host = "0.0.0.0" } = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const requestedPort = Number(process.env.PORT ?? 4177);
   const studioServer = createStudioServer({ port: requestedPort });
-  studioServer.start().then(({ port, lanAddress }) => {
+  studioServer.start().then(({ port, lanAddress, publicOrigin }) => {
     console.log(`ButterVizMap Studio running on http://localhost:${port}/admin`);
     console.log(`LAN output URL base: http://${lanAddress}:${port}`);
+    if (publicOrigin) {
+      console.log(`Public output URL base: ${publicOrigin}`);
+    }
   });
 }

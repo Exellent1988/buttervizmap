@@ -7,5 +7,5 @@ services:
       - "4177:4177"
     environment:
       PORT: "4177"
+      PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-}"
     restart: unless-stopped
-

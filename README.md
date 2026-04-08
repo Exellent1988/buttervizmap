@@ -55,6 +55,10 @@ Open:
 
 The admin panel is the master runtime. Audio analysis is captured on the admin machine and synchronized to output viewers, so a second device showing `/output/:sessionId` does not need local microphone access.
 
+Hosted demo:
+
+- [https://butter.dawolke.de](https://butter.dawolke.de)
+
 ## UI Preview
 
 Admin route (`/admin`) on desktop:
@@ -80,6 +84,37 @@ docker compose up --build
 The studio server will be available at `http://localhost:4177/admin`.
 
 The Docker image now includes the repository preset JSON catalog from `experiments/wasm-eel/presets`, so the preset browser and selector lists are not limited to the built-in studio presets.
+
+Pull and run the published image from GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/exellent1988/buttervizmap:latest
+docker run --rm -p 4177:4177 ghcr.io/exellent1988/buttervizmap:latest
+```
+
+If the studio is exposed behind a public domain or SSL reverse proxy, set `PUBLIC_ORIGIN` so the admin UI shows the correct external output URL:
+
+```bash
+docker run --rm -p 4177:4177 \
+  -e PUBLIC_ORIGIN=https://butter.dawolke.de \
+  ghcr.io/exellent1988/buttervizmap:latest
+```
+
+The server also respects `X-Forwarded-Host` and `X-Forwarded-Proto`, so it works behind nginx SSL termination when those headers are forwarded.
+
+Example nginx location:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:4177;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
 
 ## Documentation
 
