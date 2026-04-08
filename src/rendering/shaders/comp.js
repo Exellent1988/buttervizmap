@@ -219,6 +219,7 @@ export default class CompShader {
       `.trim()
     );
     this.gl.compileShader(vertShader);
+    ShaderUtils.checkShader(this.gl, vertShader, "CompShader vert");
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
     this.gl.shaderSource(
@@ -422,10 +423,12 @@ export default class CompShader {
       `.trim()
     );
     this.gl.compileShader(fragShader);
+    ShaderUtils.checkShader(this.gl, fragShader, "CompShader frag");
 
     this.gl.attachShader(this.shaderProgram, vertShader);
     this.gl.attachShader(this.shaderProgram, fragShader);
     this.gl.linkProgram(this.shaderProgram);
+    ShaderUtils.checkProgram(this.gl, this.shaderProgram, "CompShader");
 
     this.positionLocation = this.gl.getAttribLocation(
       this.shaderProgram,
@@ -664,6 +667,10 @@ export default class CompShader {
   }
 
   updateShader(shaderText) {
+    if (this.shaderProgram) {
+      this.gl.deleteProgram(this.shaderProgram);
+      this.shaderProgram = null;
+    }
     this.createShader(shaderText);
   }
 

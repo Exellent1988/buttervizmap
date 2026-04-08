@@ -40,26 +40,28 @@ async function loadButterchurnModule() {
 async function resolvePresetRuntime(presetEntry) {
   if (presetEntry.sourceType === "file") {
     if (!remotePresetCache.has(presetEntry.sourcePresetId)) {
-      remotePresetCache.set(
-        presetEntry.sourcePresetId,
-        fetch(`/api/presets/${encodeURIComponent(presetEntry.sourcePresetId)}`).then(
-          async (response) => {
-            if (!response.ok) {
-              throw new Error(`Failed to load preset ${presetEntry.sourcePresetId}`);
-            }
-            const preset = await response.json();
-            if (
-              !Object.prototype.hasOwnProperty.call(preset, "init_eqs_eel") &&
-              !Object.prototype.hasOwnProperty.call(preset, "init_eqs_str")
-            ) {
-              throw new Error(
-                `Preset ${presetEntry.sourcePresetId} is missing converted Butterchurn equations`
-              );
-            }
-            return preset;
+      const promise = fetch(`/api/presets/${encodeURIComponent(presetEntry.sourcePresetId)}`)
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`Failed to load preset ${presetEntry.sourcePresetId}`);
           }
-        )
-      );
+          const preset = await response.json();
+          if (
+            !Object.prototype.hasOwnProperty.call(preset, "init_eqs_eel") &&
+            !Object.prototype.hasOwnProperty.call(preset, "init_eqs_str")
+          ) {
+            throw new Error(
+              `Preset ${presetEntry.sourcePresetId} is missing converted Butterchurn equations`
+            );
+          }
+          return preset;
+        })
+        .catch((error) => {
+          // Remove failed entry so the preset can be retried in the same session.
+          remotePresetCache.delete(presetEntry.sourcePresetId);
+          throw error;
+        });
+      remotePresetCache.set(presetEntry.sourcePresetId, promise);
     }
 
     return remotePresetCache.get(presetEntry.sourcePresetId);
@@ -91,6 +93,9 @@ export class AdaptiveRenderer {
     this.lastRequestedPreset = null;
     this.lastFailedPresetId = null;
     this.hasRenderedCurrentPreset = false;
+    this._lastFillTexture = null;
+    this._lastContourTexture = null;
+    this._renderFailedPresetId = null;
     this.studioInteractionState = {
       enabled: false,
       fillTexture: null,
@@ -169,6 +174,7 @@ export class AdaptiveRenderer {
         this.lastError =
           error instanceof Error ? error.message : `Resize failed: ${String(error)}`;
         this.runtimeMode = "error";
+        this.runtime = null;
       }
     }
   }
@@ -189,6 +195,7 @@ export class AdaptiveRenderer {
         this.lastError =
           error instanceof Error ? error.message : `Render config update failed: ${String(error)}`;
         this.runtimeMode = "error";
+        this.runtime = null;
       }
     }
   }
@@ -205,6 +212,7 @@ export class AdaptiveRenderer {
     this.forceMock = presetEntry?.sourceType === "solid" || presetEntry?.sourceType === "builtin";
     this.fallbackMode = presetEntry?.sourceType === "solid" ? "solid" : this.forceMock ? "mock" : null;
     this.lastError = null;
+    this._renderFailedPresetId = null;
     await this.init();
     if (this.runtime?.type === "butterchurn" && !this.forceMock) {
       try {
@@ -275,30 +283,60 @@ export class AdaptiveRenderer {
   }
 
   async render({ timestamp, audioFrame, interactionSummary }) {
-    this.mockRenderer.render({ timestamp, audioFrame, interactionSummary });
-    if (this.runtime?.type === "butterchurn" && this.currentPreset && !this.forceMock) {
+    const currentPresetId = this.currentPreset?.id ?? null;
+    const renderFailed = this._renderFailedPresetId !== null &&
+      this._renderFailedPresetId === currentPresetId;
+
+    const useButterchurn =
+      !renderFailed &&
+      this.runtimeMode !== "error" &&
+      this.runtime?.type === "butterchurn" &&
+      this.currentPreset &&
+      !this.forceMock;
+
+    if (!useButterchurn) {
+      this.mockRenderer.render({ timestamp, audioFrame, interactionSummary });
+      return;
+    }
+
+    try {
       this.runtime.visualizer.setStudioInteractionState?.(this.studioInteractionState);
-      if (this.studioInteractionState.fillTexture && this.studioInteractionState.contourTexture) {
+
+      const { fillTexture, contourTexture } = this.studioInteractionState;
+      if (
+        fillTexture &&
+        contourTexture &&
+        (fillTexture !== this._lastFillTexture || contourTexture !== this._lastContourTexture)
+      ) {
         this.runtime.visualizer.loadExtraImages({
           studio_interaction_fill: {
-            data: this.studioInteractionState.fillTexture,
-            width: this.studioInteractionState.fillTexture.width,
-            height: this.studioInteractionState.fillTexture.height,
+            data: fillTexture,
+            width: fillTexture.width,
+            height: fillTexture.height,
             repeat: false,
           },
           studio_interaction_contour: {
-            data: this.studioInteractionState.contourTexture,
-            width: this.studioInteractionState.contourTexture.width,
-            height: this.studioInteractionState.contourTexture.height,
+            data: contourTexture,
+            width: contourTexture.width,
+            height: contourTexture.height,
             repeat: false,
           },
         });
+        this._lastFillTexture = fillTexture;
+        this._lastContourTexture = contourTexture;
       }
+
       this.runtime.visualizer.render({
         audioLevels: audioFrame ?? SILENT_AUDIO_FRAME,
         elapsedTime: timestamp * 0.001,
       });
       this.hasRenderedCurrentPreset = true;
+    } catch (error) {
+      // Mark only this preset as render-failed; other presets can still run normally.
+      this._renderFailedPresetId = currentPresetId;
+      this.lastError = error instanceof Error ? error.message : String(error);
+      console.warn("[Butterchurn] render error for preset", currentPresetId, "– using mock fallback:", this.lastError);
+      this.mockRenderer.render({ timestamp, audioFrame, interactionSummary });
     }
   }
 
@@ -329,6 +367,7 @@ export class AdaptiveRenderer {
       requestedPresetName: this.lastRequestedPreset?.name ?? null,
       fallbackMode: this.fallbackMode,
       lastFailedPresetId: this.lastFailedPresetId,
+      renderFailedPresetId: this._renderFailedPresetId,
       lastPresetInfo: this.lastPresetInfo,
       lastError: this.lastError,
       bundlePath: this.bundlePath,

@@ -174,6 +174,7 @@ export default class TitleText {
        }`
     );
     this.gl.compileShader(vertShader);
+    ShaderUtils.checkShader(this.gl, vertShader, "TitleText vert");
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
     this.gl.shaderSource(
@@ -194,10 +195,12 @@ export default class TitleText {
        }`
     );
     this.gl.compileShader(fragShader);
+    ShaderUtils.checkShader(this.gl, fragShader, "TitleText frag");
 
     this.gl.attachShader(this.shaderProgram, vertShader);
     this.gl.attachShader(this.shaderProgram, fragShader);
     this.gl.linkProgram(this.shaderProgram);
+    ShaderUtils.checkProgram(this.gl, this.shaderProgram, "TitleText");
 
     this.positionLocation = this.gl.getAttribLocation(
       this.shaderProgram,

@@ -192,6 +192,7 @@ export default class WarpShader {
       `.trim()
     );
     this.gl.compileShader(vertShader);
+    ShaderUtils.checkShader(this.gl, vertShader, "WarpShader vert");
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
     this.gl.shaderSource(
@@ -326,10 +327,12 @@ export default class WarpShader {
       `.trim()
     );
     this.gl.compileShader(fragShader);
+    ShaderUtils.checkShader(this.gl, fragShader, "WarpShader frag");
 
     this.gl.attachShader(this.shaderProgram, vertShader);
     this.gl.attachShader(this.shaderProgram, fragShader);
     this.gl.linkProgram(this.shaderProgram);
+    ShaderUtils.checkProgram(this.gl, this.shaderProgram, "WarpShader");
 
     this.positionLocation = this.gl.getAttribLocation(
       this.shaderProgram,
@@ -526,6 +529,10 @@ export default class WarpShader {
   }
 
   updateShader(shaderText) {
+    if (this.shaderProgram) {
+      this.gl.deleteProgram(this.shaderProgram);
+      this.shaderProgram = null;
+    }
     this.createShader(shaderText);
   }
 
