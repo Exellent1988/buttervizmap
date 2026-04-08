@@ -1,7 +1,7 @@
 import { createBuiltinLibraryEntries } from "./defaultPresets.js";
 import { normalizeGeometry } from "./geometry.js";
 
-const STORAGE_VERSION = 3;
+const STORAGE_VERSION = 4;
 const BLEND_MODES = new Set(["normal", "screen", "add", "multiply", "overlay"]);
 const BUILTIN_LIBRARY_ENTRIES = createBuiltinLibraryEntries();
 
@@ -91,6 +91,28 @@ function clampInteger(value, fallback, min, max) {
   return Math.max(min, Math.min(max, parsed));
 }
 
+function shouldDisableLegacyMainPortalInteraction(entry) {
+  return (
+    entry?.name === "Main Portal" &&
+    entry?.roles?.shaderSurface === true &&
+    entry?.roles?.interactionField === true
+  );
+}
+
+function migrateLegacyMainPortal(entry, sourceVersion) {
+  if (sourceVersion >= 4 || !shouldDisableLegacyMainPortalInteraction(entry)) {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    roles: {
+      ...entry.roles,
+      interactionField: false,
+    },
+  };
+}
+
 export function createDefaultProject() {
   const elements = [
     createSceneElement({
@@ -109,7 +131,7 @@ export function createDefaultProject() {
         clip: false,
         paint: false,
         shaderSurface: true,
-        interactionField: true,
+        interactionField: false,
       },
       style: {
         color: "#4ad1d1",
@@ -462,7 +484,9 @@ export function normalizeProjectWithDiagnostics(project = {}, options = {}) {
       presets: normalizePresetLibraryEntries(project.presetLibrary?.presets),
     },
     elements: Array.isArray(project.elements)
-      ? project.elements.map(normalizeSceneElement)
+      ? project.elements.map((element) =>
+          normalizeSceneElement(migrateLegacyMainPortal(element, sourceVersion))
+        )
       : [],
     scenes: Array.isArray(project.scenes)
       ? project.scenes.map((scene) => ({
@@ -477,11 +501,14 @@ export function normalizeProjectWithDiagnostics(project = {}, options = {}) {
             },
             elements: Array.isArray(scene.state?.elements)
               ? scene.state.elements.map((element) => ({
+                  ...migrateLegacyMainPortal(element, sourceVersion),
                   id: element.id,
                   enabled: element.enabled !== false,
                   locked: element.locked === true,
                   zIndex: Number(element.zIndex ?? 0),
-                  roles: { ...element.roles },
+                  roles: {
+                    ...migrateLegacyMainPortal(element, sourceVersion)?.roles,
+                  },
                   style: { ...element.style },
                   shaderBinding: { ...element.shaderBinding },
                 }))
