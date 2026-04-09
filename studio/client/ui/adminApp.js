@@ -43,14 +43,6 @@ function formatDateTime(value) {
   }
 }
 
-function formatList(values = []) {
-  if (!values.length) {
-    return "none";
-  }
-
-  return values.join(", ");
-}
-
 export class AdminApp {
   constructor({ root, store, sessionSocket, sessionId, lanAddress, publicOrigin }) {
     this.root = root;
@@ -88,12 +80,16 @@ export class AdminApp {
         <div class="hero-card">
           <h1>ButterVizMap Studio</h1>
           <p>Mask-driven mapping surfaces, interaction fields, scene recall and LAN output in one workspace.</p>
+          <div class="hero-actions">
+            <button id="hero-present">Output Window</button>
+            <a class="button-like secondary" href="https://github.com/Exellent1988/buttervizmap" target="_blank" rel="noopener noreferrer">Repository</a>
+          </div>
+          <p class="hero-note">If you run into problems or bugs, please open an issue in the repository.</p>
         </div>
         <div class="panel-body panel-stack">
           <section id="session-panel"></section>
           <section id="element-list"></section>
           <section id="scene-list"></section>
-          <section id="debug-panel"></section>
         </div>
       </aside>
       <main class="panel preview-panel">
@@ -880,6 +876,11 @@ export class AdminApp {
         return;
       }
 
+      if (target.id === "hero-present") {
+        window.open(`/output/${this.sessionId}`, "_blank", "noopener,noreferrer");
+        return;
+      }
+
       if (target.id === "export-project") {
         const blob = new Blob([this.store.exportProject()], {
           type: "application/json",
@@ -1404,20 +1405,6 @@ export class AdminApp {
     );
     const outputUrl = this.getOutputUrl();
     const lanHintUrl = this.getLanHintUrl();
-    const debugState = this.compositor?.getDebugState?.() ?? {};
-    const socketDebugState = this.sessionSocket?.getDebugState?.() ?? {};
-    const projectDiagnostics = state.projectDiagnostics ?? {};
-    const catalogSummary =
-      this.availablePresetSummary ?? debugState.presetCatalogSummary ?? null;
-    const visibleSurfaceSummary =
-      debugState.visibleSurfaceGeometries?.length
-        ? debugState.visibleSurfaceGeometries
-            .map(
-              (entry) =>
-                `${entry.elementName ?? entry.elementId}:${entry.visibleGeometries?.length ?? 0}`
-            )
-            .join(", ")
-        : "none";
     const sessionMarkup = `
       <div class="panel-header">
         <h3>Session</h3>
@@ -1659,80 +1646,6 @@ export class AdminApp {
       <span class="tag">Canvas <strong>${state.project.output.width}×${state.project.output.height}</strong></span>
       <span class="tag">Autosave <strong>${escapeHtml(state.autosaveStatus)}</strong></span>
       <span class="tag">Selected point <strong>${this.selectedPointIndex == null ? "none" : this.selectedPointIndex + 1}</strong></span>
-    `;
-
-    this.root.querySelector("#debug-panel").innerHTML = `
-      <div class="panel-header">
-        <h3>Debug</h3>
-        <span class="tag">Autosave <strong>${escapeHtml(state.autosaveStatus)}</strong></span>
-      </div>
-      <div class="panel-body" style="padding-top:12px">
-        <div class="debug-grid">
-          <div class="debug-card">
-            <strong>Autosave</strong>
-            <small>Last saved: ${escapeHtml(formatDateTime(state.lastSavedAt))}</small>
-            <small>Storage key: <span class="code">buttervizmap.autosave.v1</span></small>
-            <small>Error: ${escapeHtml(state.autosaveError ?? "none")}</small>
-          </div>
-          <div class="debug-card">
-            <strong>Render config</strong>
-            <small>Frame limit: ${state.project.output.rendering.frameLimit}</small>
-            <small>Canvas scale: ${state.project.output.rendering.canvasScale}x</small>
-            <small>Mesh: ${state.project.output.rendering.meshWidth} × ${state.project.output.rendering.meshHeight}</small>
-            <small>Global opacity: ${state.project.globalLayer.opacity.toFixed(2)}</small>
-            <small>Visible surfaces: ${escapeHtml(visibleSurfaceSummary)}</small>
-          </div>
-          <div class="debug-card">
-            <strong>Project diagnostics</strong>
-            <small>Source: ${escapeHtml(projectDiagnostics.source ?? "runtime")}</small>
-            <small>Version: ${escapeHtml(String(projectDiagnostics.sourceVersion ?? state.project.version))} → ${escapeHtml(String(projectDiagnostics.normalizedVersion ?? state.project.version))}</small>
-            <small>Migrated: ${projectDiagnostics.migrated ? "yes" : "no"}</small>
-            <small>Missing: ${escapeHtml(formatList(projectDiagnostics.missingSections ?? []))}</small>
-          </div>
-          <div class="debug-card">
-            <strong>Preset catalog</strong>
-            <small>Total: ${escapeHtml(String(catalogSummary?.total ?? state.project.presetLibrary.presets.length))}</small>
-            <small>Solid/Built-in/File: ${escapeHtml(
-              `${catalogSummary?.solid ?? 0} / ${catalogSummary?.builtin ?? 0} / ${catalogSummary?.file ?? 0}`
-            )}</small>
-            <small>Pack counts: ${escapeHtml(
-              catalogSummary?.byPack ? Object.entries(catalogSummary.byPack).map(([pack, count]) => `${pack}:${count}`).join(", ") : "n/a"
-            )}</small>
-            <small>Load error: ${escapeHtml(this.catalogLoadError ?? "none")}</small>
-          </div>
-          <div class="debug-card">
-            <strong>Session socket</strong>
-            <small>Status: ${escapeHtml(socketDebugState.lastStatus ?? state.connectionStatus)}</small>
-            <small>Sent/Received: ${escapeHtml(
-              `${socketDebugState.sentMessages ?? 0} / ${socketDebugState.receivedMessages ?? 0}`
-            )}</small>
-            <small>Viewers: ${escapeHtml(String(state.viewerCount))}</small>
-            <small>Last sent: ${escapeHtml(formatDateTime(socketDebugState.lastSentAt))}</small>
-            <small>Last received: ${escapeHtml(formatDateTime(socketDebugState.lastReceivedAt))}</small>
-          </div>
-        </div>
-        ${
-          debugState.elementRenderers?.length
-            ? `
-              <div class="list" style="margin-top:12px">
-                ${debugState.elementRenderers
-                  .map(
-                    (renderer) => `
-                      <div class="debug-card">
-                        <strong>${escapeHtml(renderer.currentPresetName ?? renderer.elementId)}</strong>
-                        <small>Element: ${escapeHtml(renderer.elementId)}</small>
-                        <small>Mode: ${escapeHtml(renderer.runtimeMode ?? "pending")}</small>
-                        <small>Fallback: ${escapeHtml(renderer.fallbackMode ?? "none")}</small>
-                        <small>Error: ${escapeHtml(renderer.lastError ?? "none")}</small>
-                      </div>
-                    `
-                  )
-                  .join("")}
-              </div>
-            `
-      : `<p class="muted">No local shader surfaces active.</p>`
-        }
-      </div>
     `;
 
     const shaderSurfaceActive = selectedElement?.roles?.shaderSurface === true;
