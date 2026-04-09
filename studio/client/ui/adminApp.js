@@ -253,6 +253,12 @@ export class AdminApp {
     this.saveUIPreferences();
   }
 
+  setSelectedPointIndex(pointIndex) {
+    this.selectedPointIndex = pointIndex;
+    this.render(this.store.state);
+    this.renderOverlay(this.store.state);
+  }
+
   getNumberDraftFieldIds() {
     return new Set([
       "preset-cycle-seconds",
@@ -450,8 +456,9 @@ export class AdminApp {
       return;
     }
 
-    this.store.updateProject((project) =>
-      mergePresetLibraryCatalog(project, this.availablePresetCatalog)
+    this.store.updateProject(
+      (project) => mergePresetLibraryCatalog(project, this.availablePresetCatalog),
+      { recordHistory: false }
     );
   }
 
@@ -516,27 +523,30 @@ export class AdminApp {
     const nextPreset = this.pickNextGlobalPreset();
     if (nextPreset) {
       this.pushRecentPreset(nextPreset.id);
-      this.store.updateProject((project) => ({
-        ...project,
-        globalLayer: {
-          ...project.globalLayer,
-          presetId: nextPreset.id,
-        },
-        elements: project.elements.map((element) => ({
-          ...element,
-          shaderBinding: {
-            ...element.shaderBinding,
+      this.store.updateProject(
+        (project) => ({
+          ...project,
+          globalLayer: {
+            ...project.globalLayer,
             presetId: nextPreset.id,
           },
-        })),
-        output: {
-          ...project.output,
-          presets: {
-            ...project.output.presets,
-            lastChangeMode: "auto",
+          elements: project.elements.map((element) => ({
+            ...element,
+            shaderBinding: {
+              ...element.shaderBinding,
+              presetId: nextPreset.id,
+            },
+          })),
+          output: {
+            ...project.output,
+            presets: {
+              ...project.output.presets,
+              lastChangeMode: "auto",
+            },
           },
-        },
-      }));
+        }),
+        { recordHistory: false }
+      );
     }
 
     this.nextAutoPresetAt = timestamp + presetSettings.cycleSeconds * 1000;
@@ -579,8 +589,12 @@ export class AdminApp {
     );
   }
 
-  updateSelectedElement(nextElement) {
-    this.store.updateElementDirect(nextElement.id, normalizeSceneElement(nextElement));
+  updateSelectedElement(nextElement, options = {}) {
+    this.store.updateElementDirect(
+      nextElement.id,
+      normalizeSceneElement(nextElement),
+      options
+    );
   }
 
   removeSelectedPoint() {
@@ -644,7 +658,7 @@ export class AdminApp {
           points: [...selectedElement.geometry.points, point],
         },
       });
-      this.selectedPointIndex = selectedElement.geometry.points.length;
+      this.setSelectedPointIndex(selectedElement.geometry.points.length);
     });
 
     this.overlayCanvas.addEventListener("pointerdown", (event) => {
@@ -655,11 +669,12 @@ export class AdminApp {
         : -1;
 
       if (pointIndex >= 0) {
-        this.selectedPointIndex = pointIndex;
+        this.setSelectedPointIndex(pointIndex);
         this.pointerState = {
           type: "point",
           elementId: selectedElement.id,
           pointIndex,
+          historyRecorded: false,
         };
         this.overlayCanvas.setPointerCapture(event.pointerId);
         return;
@@ -667,17 +682,18 @@ export class AdminApp {
 
       const hitElement = this.findTopmostElementAtPoint(point);
       if (!hitElement) {
-        this.selectedPointIndex = null;
+        this.setSelectedPointIndex(null);
         return;
       }
 
       this.store.setSelectedElementId(hitElement.id);
-      this.selectedPointIndex = null;
+      this.setSelectedPointIndex(null);
       this.pointerState = {
         type: "element",
         elementId: hitElement.id,
         startPoint: point,
         originalPoints: hitElement.geometry.points.map((entry) => ({ ...entry })),
+        historyRecorded: false,
       };
       this.overlayCanvas.setPointerCapture(event.pointerId);
     });
@@ -699,6 +715,10 @@ export class AdminApp {
       }
 
       if (this.pointerState.type === "point") {
+        if (!this.pointerState.historyRecorded) {
+          this.store.pushUndoSnapshot();
+          this.pointerState.historyRecorded = true;
+        }
         const points = element.geometry.points.map((candidate, index) =>
           index === this.pointerState.pointIndex ? point : candidate
         );
@@ -708,10 +728,14 @@ export class AdminApp {
             ...element.geometry,
             points,
           },
-        });
+        }, { recordHistory: false });
         return;
       }
 
+      if (!this.pointerState.historyRecorded) {
+        this.store.pushUndoSnapshot();
+        this.pointerState.historyRecorded = true;
+      }
       const dx = point.x - this.pointerState.startPoint.x;
       const dy = point.y - this.pointerState.startPoint.y;
       const points = this.pointerState.originalPoints.map((originalPoint) => ({
@@ -724,7 +748,7 @@ export class AdminApp {
           ...element.geometry,
           points,
         },
-      });
+      }, { recordHistory: false });
     });
 
     const clearPointerState = () => {
@@ -745,8 +769,17 @@ export class AdminApp {
         event.key
       );
       const isDeleteKey = event.key === "Delete";
+      const isUndoKey =
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "z";
+      const isRedoKey =
+        ((event.metaKey || event.ctrlKey) &&
+          !event.altKey &&
+          ((event.shiftKey && event.key.toLowerCase() === "z") ||
+            event.key.toLowerCase() === "y"));
 
-      if (!isArrowKey && !isDeleteKey) {
+      if (!isArrowKey && !isDeleteKey && !isUndoKey && !isRedoKey) {
         return;
       }
 
@@ -754,6 +787,20 @@ export class AdminApp {
         event.target instanceof HTMLElement &&
         ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName)
       ) {
+        return;
+      }
+
+      if (isUndoKey) {
+        event.preventDefault();
+        this.selectedPointIndex = null;
+        this.store.undo();
+        return;
+      }
+
+      if (isRedoKey) {
+        event.preventDefault();
+        this.selectedPointIndex = null;
+        this.store.redo();
         return;
       }
 
@@ -1074,6 +1121,18 @@ export class AdminApp {
         return;
       }
 
+      if (target.id === "undo-project") {
+        this.selectedPointIndex = null;
+        this.store.undo();
+        return;
+      }
+
+      if (target.id === "redo-project") {
+        this.selectedPointIndex = null;
+        this.store.redo();
+        return;
+      }
+
       if (target.id === "export-project") {
         const blob = new Blob([this.store.exportProject()], {
           type: "application/json",
@@ -1119,8 +1178,7 @@ export class AdminApp {
       }
 
       if (target.dataset.focusPoint != null) {
-        this.selectedPointIndex = Number(target.dataset.focusPoint);
-        this.renderOverlay(this.store.state);
+        this.setSelectedPointIndex(Number(target.dataset.focusPoint));
         return;
       }
 
@@ -1130,7 +1188,7 @@ export class AdminApp {
           return;
         }
 
-        this.selectedPointIndex = Number(target.dataset.removePoint);
+        this.setSelectedPointIndex(Number(target.dataset.removePoint));
         this.removeSelectedPoint();
       }
     });
@@ -1620,6 +1678,12 @@ export class AdminApp {
         </label>
         <p class="muted">For other devices, open the same output path on your host machine's real LAN IP. The container-internal address is not always the public URL.</p>
         <div class="button-row">
+          <button class="secondary" id="undo-project" ${
+            state.canUndo ? "" : "disabled"
+          }>Undo</button>
+          <button class="secondary" id="redo-project" ${
+            state.canRedo ? "" : "disabled"
+          }>Redo</button>
           <button id="open-output">Open output window</button>
           <button class="secondary" id="reset-project">Reset project</button>
         </div>
@@ -1855,6 +1919,7 @@ export class AdminApp {
           <button class="danger" id="remove-element" ${makeTitle("Deletes the currently selected element from the project.")}>Delete element</button>
         </div>
         <p class="muted">Click an element directly on the canvas to select it. Drag inside the shape to move the whole mask. Click a point to select it, then use arrow keys to nudge it. Double-click inside a polygon to add a point.</p>
+        <p class="muted">Shortcuts: <code>Del</code> delete point or element, <code>Arrow keys</code> move, <code>Cmd/Ctrl+Z</code> undo, <code>Shift+Cmd/Ctrl+Z</code> redo.</p>
         <div class="points-grid">
           ${selectedElement.geometry.points
             .map(
@@ -1895,6 +1960,7 @@ export class AdminApp {
       this.store.setProject(mergedProject, {
         preserveSelection: true,
         source: "catalog-merge",
+        recordHistory: false,
       });
     }
   }

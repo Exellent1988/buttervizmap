@@ -11,11 +11,20 @@ import {
 } from "../../shared/project.js";
 
 const AUTOSAVE_KEY = "buttervizmap.autosave.v1";
+const HISTORY_LIMIT = 50;
+
+function cloneStateValue(value) {
+  return typeof structuredClone === "function"
+    ? structuredClone(value)
+    : JSON.parse(JSON.stringify(value));
+}
 
 export class StudioStore {
   constructor(role = "admin") {
     this.role = role;
     this.listeners = new Set();
+    this.undoStack = [];
+    this.redoStack = [];
     this.state = {
       project: createDefaultProject(),
       selectedElementId: null,
@@ -27,6 +36,8 @@ export class StudioStore {
       lastSavedAt: null,
       projectDiagnostics: null,
       autosaveError: null,
+      canUndo: false,
+      canRedo: false,
     };
 
     if (role === "admin") {
@@ -46,6 +57,66 @@ export class StudioStore {
     this.listeners.forEach((listener) => listener(this.state));
   }
 
+  getHistoryEntry() {
+    return {
+      project: cloneStateValue(this.state.project),
+      selectedElementId: this.state.selectedElementId,
+      selectedSceneId: this.state.selectedSceneId,
+    };
+  }
+
+  syncHistoryFlags() {
+    this.state.canUndo = this.undoStack.length > 0;
+    this.state.canRedo = this.redoStack.length > 0;
+  }
+
+  pushUndoSnapshot() {
+    this.undoStack.push(this.getHistoryEntry());
+    if (this.undoStack.length > HISTORY_LIMIT) {
+      this.undoStack.shift();
+    }
+    this.redoStack = [];
+    this.syncHistoryFlags();
+  }
+
+  restoreHistoryEntry(entry) {
+    const bundle = normalizeProjectWithDiagnostics(entry.project, {
+      source: "history",
+    });
+    this.state.project = bundle.project;
+    this.state.projectDiagnostics = bundle.diagnostics;
+    this.state.selectedElementId =
+      entry.selectedElementId ?? bundle.project.elements[0]?.id ?? null;
+    this.state.selectedSceneId = entry.selectedSceneId ?? null;
+    if (this.role === "admin") {
+      this.saveAutosave();
+    }
+    this.syncHistoryFlags();
+    this.emit();
+  }
+
+  undo() {
+    const entry = this.undoStack.pop();
+    if (!entry) {
+      return false;
+    }
+
+    this.redoStack.push(this.getHistoryEntry());
+    this.restoreHistoryEntry(entry);
+    return true;
+  }
+
+  redo() {
+    const entry = this.redoStack.pop();
+    if (!entry) {
+      return false;
+    }
+
+    this.undoStack.push(this.getHistoryEntry());
+    this.restoreHistoryEntry(entry);
+    return true;
+  }
+
   setConnectionStatus(connectionStatus) {
     this.state.connectionStatus = connectionStatus;
     this.emit();
@@ -61,6 +132,10 @@ export class StudioStore {
   }
 
   setProject(project, options = {}) {
+    if (options.recordHistory === true) {
+      this.pushUndoSnapshot();
+    }
+
     const bundle = options.bundle ?? normalizeProjectWithDiagnostics(project, {
       source: options.source,
     });
@@ -73,10 +148,11 @@ export class StudioStore {
     if (this.role === "admin" && options.skipAutosave !== true) {
       this.saveAutosave();
     }
+    this.syncHistoryFlags();
     this.emit();
   }
 
-  updateProject(updater) {
+  updateProject(updater, options = {}) {
     const nextProject = updater(this.state.project);
     this.setProject({
       ...nextProject,
@@ -84,7 +160,7 @@ export class StudioStore {
         ...nextProject.meta,
         updatedAt: new Date().toISOString(),
       },
-    }, { preserveSelection: true });
+    }, { preserveSelection: true, recordHistory: true, ...options });
   }
 
   loadAutosave() {
@@ -119,12 +195,12 @@ export class StudioStore {
   }
 
   resetProject() {
-    this.setProject(createDefaultProject());
+    this.setProject(createDefaultProject(), { recordHistory: true });
   }
 
   importProject(serializedProject) {
     const bundle = parseProjectBundle(serializedProject, { source: "import" });
-    this.setProject(bundle.project, { bundle });
+    this.setProject(bundle.project, { bundle, recordHistory: true });
   }
 
   exportProject() {
@@ -167,22 +243,22 @@ export class StudioStore {
     this.emit();
   }
 
-  updateElement(elementId, updater) {
+  updateElement(elementId, updater, options = {}) {
     this.updateProject((project) => ({
       ...project,
       elements: project.elements.map((element) =>
         element.id === elementId ? normalizeSceneElement(updater(element)) : element
       ),
-    }));
+    }), options);
   }
 
-  updateElementDirect(elementId, nextElement) {
+  updateElementDirect(elementId, nextElement, options = {}) {
     this.updateProject((project) => ({
       ...project,
       elements: project.elements.map((element) =>
         element.id === elementId ? nextElement : element
       ),
-    }));
+    }), options);
   }
 
   addScene(name) {
@@ -205,12 +281,14 @@ export class StudioStore {
     this.state.selectedSceneId = sceneId;
     this.setProject(applySceneToProject(this.state.project, sceneId), {
       preserveSelection: true,
+      recordHistory: true,
     });
   }
 
   duplicatePreset(presetId) {
     this.setProject(duplicatePresetEntry(this.state.project, presetId), {
       preserveSelection: true,
+      recordHistory: true,
     });
   }
 
