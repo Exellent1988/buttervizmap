@@ -394,6 +394,36 @@ export class AdminApp {
     this.store.updateElementDirect(nextElement.id, normalizeSceneElement(nextElement));
   }
 
+  removeSelectedPoint() {
+    const selectedElement = this.getSelectedElement();
+    if (
+      !selectedElement ||
+      selectedElement.geometry.kind === "quad" ||
+      this.selectedPointIndex == null ||
+      selectedElement.geometry.points.length <= 3
+    ) {
+      return false;
+    }
+
+    const pointIndex = this.selectedPointIndex;
+    const points = selectedElement.geometry.points.filter(
+      (_, index) => index !== pointIndex
+    );
+
+    this.selectedPointIndex =
+      pointIndex >= points.length ? points.length - 1 : pointIndex;
+
+    this.updateSelectedElement({
+      ...selectedElement,
+      geometry: {
+        ...selectedElement.geometry,
+        points,
+      },
+    });
+
+    return true;
+  }
+
   findTopmostElementAtPoint(point) {
     return [...this.store.state.project.elements]
       .filter((element) => element.enabled && pointInPolygon(point, element.geometry.points))
@@ -522,7 +552,12 @@ export class AdminApp {
 
   bindKeyboardEvents() {
     window.addEventListener("keydown", (event) => {
-      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+      const isArrowKey = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(
+        event.key
+      );
+      const isDeleteKey = event.key === "Delete";
+
+      if (!isArrowKey && !isDeleteKey) {
         return;
       }
 
@@ -535,6 +570,18 @@ export class AdminApp {
 
       const selectedElement = this.getSelectedElement();
       if (!selectedElement) {
+        return;
+      }
+
+      if (isDeleteKey) {
+        event.preventDefault();
+        if (this.selectedPointIndex != null) {
+          this.removeSelectedPoint();
+          return;
+        }
+
+        this.store.removeSelectedElement();
+        this.selectedPointIndex = null;
         return;
       }
 
@@ -885,27 +932,12 @@ export class AdminApp {
 
       if (target.dataset.removePoint != null) {
         const selectedElement = this.getSelectedElement();
-        if (
-          !selectedElement ||
-          selectedElement.geometry.kind === "quad" ||
-          selectedElement.geometry.points.length <= 3
-        ) {
+        if (!selectedElement) {
           return;
         }
 
-        const pointIndex = Number(target.dataset.removePoint);
-        const points = selectedElement.geometry.points.filter(
-          (_, index) => index !== pointIndex
-        );
-        this.selectedPointIndex =
-          this.selectedPointIndex === pointIndex ? null : this.selectedPointIndex;
-        this.updateSelectedElement({
-          ...selectedElement,
-          geometry: {
-            ...selectedElement.geometry,
-            points,
-          },
-        });
+        this.selectedPointIndex = Number(target.dataset.removePoint);
+        this.removeSelectedPoint();
       }
     });
 
@@ -1801,8 +1833,12 @@ export class AdminApp {
           ${selectedElement.geometry.points
             .map(
               (point, index) => `
-                <div class="point-row">
-                  <button class="ghost" data-focus-point="${index}" ${makeTitle("Selects this point so it becomes highlighted on the canvas and can be moved with arrow keys.")}>P${index + 1}</button>
+                <div class="point-row ${
+                  this.selectedPointIndex === index ? "active" : ""
+                }">
+                  <button class="ghost ${
+                    this.selectedPointIndex === index ? "active" : ""
+                  }" data-focus-point="${index}" ${makeTitle("Selects this point so it becomes highlighted on the canvas and can be moved with arrow keys.")}>P${index + 1}</button>
                   <input data-point-index="${index}" data-axis="x" type="number" min="0" max="1" step="0.01" value="${point.x.toFixed(2)}" ${makeTitle("Normalized X position of this point on the output canvas.")} />
                   <input data-point-index="${index}" data-axis="y" type="number" min="0" max="1" step="0.01" value="${point.y.toFixed(2)}" ${makeTitle("Normalized Y position of this point on the output canvas.")} />
                   <button class="ghost" data-remove-point="${index}" ${
