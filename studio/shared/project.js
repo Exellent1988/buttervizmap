@@ -138,7 +138,7 @@ export function createDefaultProject() {
         opacity: 0.72,
       },
       shaderBinding: {
-        presetId: "nebula-pulse",
+        presetId: "suksma - nip tuck.json",
         opacity: 0.92,
         enabled: true,
       },
@@ -149,14 +149,14 @@ export function createDefaultProject() {
       geometry: {
         kind: "polygon",
         points: [
-          { x: 0.08, y: 0.66 },
-          { x: 0.28, y: 0.52 },
-          { x: 0.44, y: 0.92 },
+          { x: 0.043175119447314045, y: 0.7594112578977599 },
+          { x: 0.24317511944731407, y: 0.6194112578977599 },
+          { x: 0.40317511944731405, y: 1 },
         ],
       },
       roles: {
         clip: false,
-        paint: true,
+        paint: false,
         shaderSurface: false,
         interactionField: true,
       },
@@ -166,7 +166,7 @@ export function createDefaultProject() {
       },
     }),
     createSceneElement({
-      name: "Negative Cutout",
+      name: "Polygon Field",
       zIndex: 3,
       geometry: {
         kind: "polygon",
@@ -183,8 +183,8 @@ export function createDefaultProject() {
         interactionField: false,
       },
       style: {
-        color: "#ffffff",
-        opacity: 1,
+        color: "#58d1c9",
+        opacity: 0.7,
       },
     }),
   ];
@@ -205,20 +205,20 @@ export function createDefaultProject() {
         frameLimit: 45,
         canvasScale: 2,
         meshWidth: 48,
-        meshHeight: 36,
+        meshHeight: 48,
       },
       presets: {
-        cycleEnabled: false,
+        cycleEnabled: true,
         cycleSeconds: 25,
         randomizeNextPreset: true,
         autoBlendSeconds: 2.7,
         userBlendSeconds: 5.7,
-        lastChangeMode: "user",
+        lastChangeMode: "auto",
       },
     },
     globalLayer: {
       enabled: true,
-      presetId: "aurora-grid",
+      presetId: "suksma - nip tuck.json",
       opacity: 1,
       scale: 1,
     },
@@ -652,7 +652,17 @@ export function duplicatePresetEntry(project, presetId) {
 }
 
 export function serializeProject(project) {
-  return JSON.stringify(normalizeProject(project), null, 2);
+  const normalizedProject = normalizeProject(project);
+  const exportProject =
+    typeof structuredClone === "function"
+      ? structuredClone(normalizedProject)
+      : JSON.parse(JSON.stringify(normalizedProject));
+
+  if (exportProject.presetLibrary && typeof exportProject.presetLibrary === "object") {
+    delete exportProject.presetLibrary.presets;
+  }
+
+  return JSON.stringify(exportProject, null, 2);
 }
 
 export function parseProject(serializedProject) {

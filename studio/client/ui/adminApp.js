@@ -71,6 +71,7 @@ export class AdminApp {
     this.favoritePresetIds = [];
     this.recentPresetIds = [];
     this.hoverElementId = null;
+    this.inputDrafts = new Map();
   }
 
   mount() {
@@ -250,6 +251,198 @@ export class AdminApp {
   pushRecentPreset(presetId) {
     this.recentPresetIds = [presetId, ...this.recentPresetIds.filter((entry) => entry !== presetId)].slice(0, 8);
     this.saveUIPreferences();
+  }
+
+  getNumberDraftFieldIds() {
+    return new Set([
+      "preset-cycle-seconds",
+      "preset-auto-blend-seconds",
+      "preset-user-blend-seconds",
+      "global-opacity",
+      "render-mesh-width",
+      "render-mesh-height",
+      "element-zindex",
+      "element-opacity",
+      "shader-opacity",
+      "shader-scale",
+      "shader-rotation",
+      "shader-offset-x",
+      "shader-offset-y",
+    ]);
+  }
+
+  getPointDraftKey(elementId, pointIndex, axis) {
+    return `point:${elementId}:${pointIndex}:${axis}`;
+  }
+
+  getInputDraftKey(target) {
+    if (!(target instanceof HTMLInputElement) || target.type !== "number") {
+      return null;
+    }
+
+    if (target.id && this.getNumberDraftFieldIds().has(target.id)) {
+      return `field:${target.id}`;
+    }
+
+    if (target.dataset.pointIndex != null && target.dataset.axis) {
+      const selectedElement = this.getSelectedElement();
+      if (!selectedElement) {
+        return null;
+      }
+
+      return this.getPointDraftKey(
+        selectedElement.id,
+        Number(target.dataset.pointIndex),
+        target.dataset.axis
+      );
+    }
+
+    return null;
+  }
+
+  isDraftableNumberInput(target) {
+    return Boolean(this.getInputDraftKey(target));
+  }
+
+  getDraftValue(key, fallback) {
+    return this.inputDrafts.has(key) ? this.inputDrafts.get(key) : fallback;
+  }
+
+  commitNumberInput(target) {
+    const draftKey = this.getInputDraftKey(target);
+    if (!draftKey || !this.inputDrafts.has(draftKey)) {
+      return false;
+    }
+
+    const rawValue = target.value.trim();
+    this.inputDrafts.delete(draftKey);
+
+    if (rawValue === "" || Number.isNaN(Number(rawValue))) {
+      this.render(this.store.state);
+      return true;
+    }
+
+    const numericValue = Number(rawValue);
+
+    if (target.id === "global-opacity") {
+      this.store.updateProject((project) => ({
+        ...project,
+        globalLayer: {
+          ...project.globalLayer,
+          opacity: numericValue,
+        },
+      }));
+      return true;
+    }
+
+    if (
+      [
+        "preset-cycle-seconds",
+        "preset-auto-blend-seconds",
+        "preset-user-blend-seconds",
+      ].includes(target.id)
+    ) {
+      const fieldMap = {
+        "preset-cycle-seconds": "cycleSeconds",
+        "preset-auto-blend-seconds": "autoBlendSeconds",
+        "preset-user-blend-seconds": "userBlendSeconds",
+      };
+      this.store.updateProject((project) => ({
+        ...project,
+        output: {
+          ...project.output,
+          presets: {
+            ...project.output.presets,
+            [fieldMap[target.id]]: numericValue,
+          },
+        },
+      }));
+      return true;
+    }
+
+    if (["render-mesh-width", "render-mesh-height"].includes(target.id)) {
+      const fieldMap = {
+        "render-mesh-width": "meshWidth",
+        "render-mesh-height": "meshHeight",
+      };
+      this.store.updateProject((project) => ({
+        ...project,
+        output: {
+          ...project.output,
+          rendering: {
+            ...project.output.rendering,
+            [fieldMap[target.id]]: numericValue,
+          },
+        },
+      }));
+      return true;
+    }
+
+    const selectedElement = this.getSelectedElement();
+    if (!selectedElement) {
+      this.render(this.store.state);
+      return true;
+    }
+
+    if (target.id === "element-zindex") {
+      this.updateSelectedElement({
+        ...selectedElement,
+        zIndex: numericValue,
+      });
+      return true;
+    }
+
+    if (target.id === "element-opacity") {
+      this.updateSelectedElement({
+        ...selectedElement,
+        style: {
+          ...selectedElement.style,
+          opacity: numericValue,
+        },
+      });
+      return true;
+    }
+
+    if (
+      ["shader-opacity", "shader-scale", "shader-offset-x", "shader-offset-y", "shader-rotation"].includes(
+        target.id
+      )
+    ) {
+      const fieldMap = {
+        "shader-opacity": "opacity",
+        "shader-scale": "scale",
+        "shader-offset-x": "offsetX",
+        "shader-offset-y": "offsetY",
+        "shader-rotation": "rotation",
+      };
+      this.updateSelectedElement({
+        ...selectedElement,
+        shaderBinding: {
+          ...selectedElement.shaderBinding,
+          [fieldMap[target.id]]: numericValue,
+        },
+      });
+      return true;
+    }
+
+    if (target.dataset.pointIndex != null) {
+      const pointIndex = Number(target.dataset.pointIndex);
+      const axis = target.dataset.axis;
+      this.selectedPointIndex = pointIndex;
+      const points = selectedElement.geometry.points.map((point, index) =>
+        index === pointIndex ? { ...point, [axis]: numericValue } : point
+      );
+      this.updateSelectedElement({
+        ...selectedElement,
+        geometry: {
+          ...selectedElement.geometry,
+          points,
+        },
+      });
+      return true;
+    }
+
+    return false;
   }
 
   applyPresetCatalog() {
@@ -946,6 +1139,22 @@ export class AdminApp {
       this.handleLiveInput(event.target);
     });
 
+    this.root.addEventListener("focusout", (event) => {
+      if (this.isDraftableNumberInput(event.target)) {
+        this.commitNumberInput(event.target);
+      }
+    });
+
+    this.root.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || !this.isDraftableNumberInput(event.target)) {
+        return;
+      }
+
+      event.preventDefault();
+      this.commitNumberInput(event.target);
+      event.target.blur();
+    });
+
     this.root.addEventListener("change", async (event) => {
       await this.handleCommittedChange(event.target);
     });
@@ -956,73 +1165,16 @@ export class AdminApp {
       return;
     }
 
+    if (this.isDraftableNumberInput(target)) {
+      const draftKey = this.getInputDraftKey(target);
+      this.inputDrafts.set(draftKey, target.value);
+      return;
+    }
+
     if (target.id === "preset-search") {
       this.presetSearchQuery = target.value;
       this.saveUIPreferences();
       this.render(this.store.state);
-      return;
-    }
-
-    if (target.id === "global-opacity") {
-      this.store.updateProject((project) => ({
-        ...project,
-        globalLayer: {
-          ...project.globalLayer,
-          opacity: Number(target.value),
-        },
-      }));
-      return;
-    }
-
-    if (
-      [
-        "preset-cycle-seconds",
-        "preset-auto-blend-seconds",
-        "preset-user-blend-seconds",
-      ].includes(target.id)
-    ) {
-      const fieldMap = {
-        "preset-cycle-seconds": "cycleSeconds",
-        "preset-auto-blend-seconds": "autoBlendSeconds",
-        "preset-user-blend-seconds": "userBlendSeconds",
-      };
-      this.store.updateProject((project) => ({
-        ...project,
-        output: {
-          ...project.output,
-          presets: {
-            ...project.output.presets,
-            [fieldMap[target.id]]: Number(target.value),
-          },
-        },
-      }));
-      return;
-    }
-
-    if (
-      [
-        "render-frame-limit",
-        "render-canvas-scale",
-        "render-mesh-width",
-        "render-mesh-height",
-      ].includes(target.id)
-    ) {
-      const fieldMap = {
-        "render-frame-limit": "frameLimit",
-        "render-canvas-scale": "canvasScale",
-        "render-mesh-width": "meshWidth",
-        "render-mesh-height": "meshHeight",
-      };
-      this.store.updateProject((project) => ({
-        ...project,
-        output: {
-          ...project.output,
-          rendering: {
-            ...project.output.rendering,
-            [fieldMap[target.id]]: Number(target.value),
-          },
-        },
-      }));
       return;
     }
 
@@ -1039,14 +1191,6 @@ export class AdminApp {
       return;
     }
 
-    if (target.id === "element-zindex") {
-      this.updateSelectedElement({
-        ...selectedElement,
-        zIndex: Number(target.value),
-      });
-      return;
-    }
-
     if (target.id === "element-color") {
       this.updateSelectedElement({
         ...selectedElement,
@@ -1058,59 +1202,15 @@ export class AdminApp {
       this.schedulePanelRefresh();
       return;
     }
-
-    if (target.id === "element-opacity") {
-      this.updateSelectedElement({
-        ...selectedElement,
-        style: {
-          ...selectedElement.style,
-          opacity: Number(target.value),
-        },
-      });
-      return;
-    }
-
-    if (
-      ["shader-opacity", "shader-scale", "shader-offset-x", "shader-offset-y", "shader-rotation"].includes(
-        target.id
-      )
-    ) {
-      const fieldMap = {
-        "shader-opacity": "opacity",
-        "shader-scale": "scale",
-        "shader-offset-x": "offsetX",
-        "shader-offset-y": "offsetY",
-        "shader-rotation": "rotation",
-      };
-      this.updateSelectedElement({
-        ...selectedElement,
-        shaderBinding: {
-          ...selectedElement.shaderBinding,
-          [fieldMap[target.id]]: Number(target.value),
-        },
-      });
-      return;
-    }
-
-    if (target.dataset.pointIndex != null) {
-      const pointIndex = Number(target.dataset.pointIndex);
-      const axis = target.dataset.axis;
-      this.selectedPointIndex = pointIndex;
-      const points = selectedElement.geometry.points.map((point, index) =>
-        index === pointIndex ? { ...point, [axis]: Number(target.value) } : point
-      );
-      this.updateSelectedElement({
-        ...selectedElement,
-        geometry: {
-          ...selectedElement.geometry,
-          points,
-        },
-      });
-    }
   }
 
   async handleCommittedChange(target) {
     if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    if (this.isDraftableNumberInput(target)) {
+      this.commitNumberInput(target);
       return;
     }
 
@@ -1387,12 +1487,23 @@ export class AdminApp {
   shouldPreservePanel(selector, colorInputId) {
     const panel = this.root.querySelector(selector);
     const activeElement = document.activeElement;
-    return (
-      panel &&
+    if (!panel || !(activeElement instanceof HTMLElement) || !panel.contains(activeElement)) {
+      return false;
+    }
+
+    if (
       activeElement instanceof HTMLInputElement &&
       activeElement.type === "color" &&
-      activeElement.id === colorInputId &&
-      panel.contains(activeElement)
+      activeElement.id === colorInputId
+    ) {
+      return true;
+    }
+
+    const draftKey = this.getInputDraftKey(activeElement);
+    return (
+      activeElement instanceof HTMLInputElement &&
+      activeElement.type === "number" &&
+      Boolean(draftKey && this.inputDrafts.has(draftKey))
     );
   }
 
@@ -1427,19 +1538,19 @@ export class AdminApp {
           </label>
           <label ${makeTitle("Interval used when automatic preset cycling is enabled.")}>
             Cycle seconds
-            <input id="preset-cycle-seconds" type="number" min="5" max="300" step="1" value="${state.project.output.presets.cycleSeconds}" />
+            <input id="preset-cycle-seconds" type="number" min="5" max="300" step="1" value="${this.getDraftValue("field:preset-cycle-seconds", state.project.output.presets.cycleSeconds)}" />
           </label>
           <label ${makeTitle("Blend duration used when presets change automatically through cycling.")}>
             Auto blend seconds
-            <input id="preset-auto-blend-seconds" type="number" min="0" max="20" step="0.1" value="${state.project.output.presets.autoBlendSeconds}" />
+            <input id="preset-auto-blend-seconds" type="number" min="0" max="20" step="0.1" value="${this.getDraftValue("field:preset-auto-blend-seconds", state.project.output.presets.autoBlendSeconds)}" />
           </label>
           <label ${makeTitle("Blend duration used when you manually change a preset in the studio UI.")}>
             Manual blend seconds
-            <input id="preset-user-blend-seconds" type="number" min="0" max="20" step="0.1" value="${state.project.output.presets.userBlendSeconds}" />
+            <input id="preset-user-blend-seconds" type="number" min="0" max="20" step="0.1" value="${this.getDraftValue("field:preset-user-blend-seconds", state.project.output.presets.userBlendSeconds)}" />
           </label>
           <label ${makeTitle("Master opacity multiplier applied to all rendered elements in the output.")}>
             Global opacity
-            <input id="global-opacity" type="number" min="0" max="1" step="0.05" value="${state.project.globalLayer.opacity}" />
+            <input id="global-opacity" type="number" min="0" max="1" step="0.05" value="${this.getDraftValue("field:global-opacity", state.project.globalLayer.opacity)}" />
           </label>
           <label ${makeTitle("Limits the admin and output render loops to a target frame rate.")}>
             Frame limit
@@ -1476,11 +1587,11 @@ export class AdminApp {
           </label>
           <label ${makeTitle("Horizontal internal mesh density used by Butterchurn warp and comp passes.")}>
             Mesh width
-            <input id="render-mesh-width" type="number" min="8" max="128" step="1" value="${state.project.output.rendering.meshWidth}" />
+            <input id="render-mesh-width" type="number" min="8" max="128" step="1" value="${this.getDraftValue("field:render-mesh-width", state.project.output.rendering.meshWidth)}" />
           </label>
           <label ${makeTitle("Vertical internal mesh density used by Butterchurn warp and comp passes.")}>
             Mesh height
-            <input id="render-mesh-height" type="number" min="6" max="96" step="1" value="${state.project.output.rendering.meshHeight}" />
+            <input id="render-mesh-height" type="number" min="6" max="96" step="1" value="${this.getDraftValue("field:render-mesh-height", state.project.output.rendering.meshHeight)}" />
           </label>
         </div>
         <label ${makeTitle("Use the built-in demo generator or capture microphone input on the admin device.")}>
@@ -1521,7 +1632,9 @@ export class AdminApp {
         </div>
       </div>
     `;
-    this.root.querySelector("#session-panel").innerHTML = sessionMarkup;
+    if (!this.shouldPreservePanel("#session-panel")) {
+      this.root.querySelector("#session-panel").innerHTML = sessionMarkup;
+    }
 
     this.root.querySelector("#element-list").innerHTML = `
       <div class="panel-header">
@@ -1659,7 +1772,7 @@ export class AdminApp {
         <div class="field-grid compact">
           <label ${makeTitle("Higher z-index elements render later and therefore appear on top.")}>
             Z-index
-            <input id="element-zindex" type="number" value="${selectedElement.zIndex}" />
+            <input id="element-zindex" type="number" value="${this.getDraftValue("field:element-zindex", selectedElement.zIndex)}" />
           </label>
           <label ${makeTitle("Base color for paint mode and the default color written into the interaction field.")}>
             Color
@@ -1667,7 +1780,7 @@ export class AdminApp {
           </label>
           <label ${makeTitle("Opacity of the element when it is used as a visible paint layer.")}>
             Opacity
-            <input id="element-opacity" type="number" min="0" max="1" step="0.05" value="${selectedElement.style.opacity}" />
+            <input id="element-opacity" type="number" min="0" max="1" step="0.05" value="${this.getDraftValue("field:element-opacity", selectedElement.style.opacity)}" />
           </label>
         </div>
         <div class="field-grid">
@@ -1689,7 +1802,7 @@ export class AdminApp {
         <div class="field-grid compact">
           <label ${makeTitle("Opacity of the local shader surface before additional blend and interaction effects are applied.")}>
             Shader opacity
-            <input id="shader-opacity" type="number" min="0" max="1" step="0.05" value="${selectedElement.shaderBinding.opacity}" />
+            <input id="shader-opacity" type="number" min="0" max="1" step="0.05" value="${this.getDraftValue("field:shader-opacity", selectedElement.shaderBinding.opacity)}" />
           </label>
           <label ${makeTitle("Canvas blend mode used when this shader surface is composited over the current output.")}>
             Blend mode
@@ -1703,19 +1816,19 @@ export class AdminApp {
           </label>
           <label ${makeTitle("Scales the shader content within the selected surface. Useful for avoiding a flat fullscreen-clipped look.")}>
             Shader scale
-            <input id="shader-scale" type="number" min="0.25" max="3" step="0.05" value="${selectedElement.shaderBinding.scale}" />
+            <input id="shader-scale" type="number" min="0.25" max="3" step="0.05" value="${this.getDraftValue("field:shader-scale", selectedElement.shaderBinding.scale)}" />
           </label>
           <label ${makeTitle("Rotates the mapped shader content inside the surface.")}>
             Rotation
-            <input id="shader-rotation" type="number" min="-180" max="180" step="1" value="${selectedElement.shaderBinding.rotation}" />
+            <input id="shader-rotation" type="number" min="-180" max="180" step="1" value="${this.getDraftValue("field:shader-rotation", selectedElement.shaderBinding.rotation)}" />
           </label>
           <label ${makeTitle("Offsets the local shader horizontally inside the surface. Values are relative to the surface width.")}>
             Offset X
-            <input id="shader-offset-x" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetX}" />
+            <input id="shader-offset-x" type="number" min="-1" max="1" step="0.01" value="${this.getDraftValue("field:shader-offset-x", selectedElement.shaderBinding.offsetX)}" />
           </label>
           <label ${makeTitle("Offsets the local shader vertically inside the surface. Values are relative to the surface height.")}>
             Offset Y
-            <input id="shader-offset-y" type="number" min="-1" max="1" step="0.01" value="${selectedElement.shaderBinding.offsetY}" />
+            <input id="shader-offset-y" type="number" min="-1" max="1" step="0.01" value="${this.getDraftValue("field:shader-offset-y", selectedElement.shaderBinding.offsetY)}" />
           </label>
         </div>
         <div class="role-grid">
@@ -1752,8 +1865,8 @@ export class AdminApp {
                   <button class="ghost ${
                     this.selectedPointIndex === index ? "active" : ""
                   }" data-focus-point="${index}" ${makeTitle("Selects this point so it becomes highlighted on the canvas and can be moved with arrow keys.")}>P${index + 1}</button>
-                  <input data-point-index="${index}" data-axis="x" type="number" min="0" max="1" step="0.01" value="${point.x.toFixed(2)}" ${makeTitle("Normalized X position of this point on the output canvas.")} />
-                  <input data-point-index="${index}" data-axis="y" type="number" min="0" max="1" step="0.01" value="${point.y.toFixed(2)}" ${makeTitle("Normalized Y position of this point on the output canvas.")} />
+                  <input data-point-index="${index}" data-axis="x" type="number" min="0" max="1" step="0.01" value="${this.getDraftValue(this.getPointDraftKey(selectedElement.id, index, "x"), point.x.toFixed(2))}" ${makeTitle("Normalized X position of this point on the output canvas.")} />
+                  <input data-point-index="${index}" data-axis="y" type="number" min="0" max="1" step="0.01" value="${this.getDraftValue(this.getPointDraftKey(selectedElement.id, index, "y"), point.y.toFixed(2))}" ${makeTitle("Normalized Y position of this point on the output canvas.")} />
                   <button class="ghost" data-remove-point="${index}" ${
                     selectedElement.geometry.kind === "quad" ? "disabled" : ""
                   } ${makeTitle("Removes this point from the polygon. Quad corners are fixed at four points.")}>Remove</button>
